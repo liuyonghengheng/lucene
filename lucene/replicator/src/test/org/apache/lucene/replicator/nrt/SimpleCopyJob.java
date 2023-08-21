@@ -168,7 +168,7 @@ class SimpleCopyJob extends CopyJob {
       if (Node.VERBOSE_FILES) {
         dest.message("rename file " + tmpFileName + " to " + fileName);
       }
-
+      // 如果部分文件重命名失败，这种问题不需要处理，最多也只会导致有一些无用的文件，不会造成其他问题，因为此时还没更新segment元数据！
       // NOTE: if this throws exception, then some files have been moved to their true names, and
       // others are leftover .tmp files.  I don't
       // think heroic exception handling is necessary (no harm will come, except some leftover

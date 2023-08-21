@@ -52,7 +52,7 @@ import org.apache.lucene.util.automaton.ByteRunAutomaton;
 
 /**
  * Implements search over a single IndexReader.
- *
+ * 在单个IndexReader上实现搜索, 里面只有一个reader,但是可以
  * <p>Applications usually need only call the inherited {@link #search(Query,int)} method. For
  * performance reasons, if your index is unchanging, you should share a single IndexSearcher
  * instance across multiple searches instead of creating a new one per-search. If your index has

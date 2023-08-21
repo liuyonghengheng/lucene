@@ -232,7 +232,7 @@ public class TestNRTReplication extends LuceneTestCase {
     docs.close();
   }
 
-  @Nightly
+//  @Nightly
   public void testReplicateDeleteAllDocuments() throws Exception {
 
     Path primaryPath = createTempDir("primary");

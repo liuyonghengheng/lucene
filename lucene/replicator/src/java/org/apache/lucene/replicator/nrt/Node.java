@@ -51,12 +51,12 @@ public abstract class Node implements Closeable {
   /**
    * Key to store the primary gen in the commit data, which increments every time we promote a new
    * primary, so replicas can detect when the primary they were talking to is changed
-   */
+   */ //由于节点宕机可能导致主副本已经切换，我们会把一个副本提升为主副本，所以要让副本知道他们交互的主副本已经改变。
   public static String PRIMARY_GEN_KEY = "__primaryGen";
 
   /**
    * Key to store the version in the commit data, which increments every time we open a new NRT
-   * reader
+   * reader 这里需要确定是只有每次打开新的NRTreader才会增加吗？好像每次segments发生改变也会增加
    */
   public static String VERSION_KEY = "__version";
 
@@ -68,7 +68,7 @@ public abstract class Node implements Closeable {
   protected final SearcherFactory searcherFactory;
 
   // Tracks NRT readers, opened from IW (primary) or opened from replicated SegmentInfos pulled
-  // across the wire (replica):
+  // across the wire (replica):跟踪readers，打开的同一条线上的， primary 或者 复制的SegmentInfos
   protected ReferenceManager<IndexSearcher> mgr;
 
   /**
@@ -98,12 +98,12 @@ public abstract class Node implements Closeable {
     this.printStream = printStream;
   }
 
-  /** Returns the {@link ReferenceManager} to use for acquiring and releasing searchers */
+  /** Returns the {@link ReferenceManager} to use for acquiring and releasing searchers 用于获取和释放searchers*/
   public ReferenceManager<IndexSearcher> getSearcherManager() {
     return mgr;
   }
 
-  /** Returns the {@link Directory} this node is writing to */
+  /** Returns the {@link Directory} this node is writing to 这个node数据写入的文件夹*/
   public Directory getDirectory() {
     return dir;
   }

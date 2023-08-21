@@ -188,7 +188,7 @@ public class TestStressNRTReplication extends LuceneTestCase {
 
   final Set<Integer> crashingNodes = Collections.synchronizedSet(new HashSet<>());
 
-  @Nightly
+//  @Nightly
   public void test() throws Exception {
 
     Node.globalStartNS = System.nanoTime();

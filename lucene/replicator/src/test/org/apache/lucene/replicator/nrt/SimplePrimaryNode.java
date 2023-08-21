@@ -70,7 +70,7 @@ import org.apache.lucene.util.ThreadInterruptedException;
 
 /** A primary node that uses simple TCP connections to send commands and copy files */
 class SimplePrimaryNode extends PrimaryNode {
-
+// SimplePrimaryNode使用tcp连接进行文件copy和命令发送
   final int tcpPort;
 
   final Random random;
@@ -344,27 +344,27 @@ class SimplePrimaryNode extends PrimaryNode {
 
     message("now flush; " + replicaIDs.length + " replicas");
 
-    if (flushAndRefresh()) {
+    if (flushAndRefresh()) { //这里面执行刷新?
       // Something did get flushed (there were indexing ops since the last flush):
 
       verifyAtLeastMarkerCount(atLeastMarkerCount, null);
 
       // Tell caller the version before pushing to replicas, so that even if we crash after this,
-      // caller will know what version we
+      // caller will know what version we //把version 返回给命令的调用者，调用者知道会把哪个version推送给replica，
       // (possibly) pushed to some replicas.  Alternatively we could make this 2 separate ops?
       long version = getCopyStateVersion();
       message("send flushed version=" + version);
       topOut.writeLong(version);
       bos.flush();
 
-      // Notify current replicas:
+      // Notify current replicas: 通知所有的replica 新的nrt point 形成了，可以拉数据了
       for (int i = 0; i < replicaIDs.length; i++) {
         int replicaID = replicaIDs[i];
         try (Connection c = new Connection(replicaTCPPorts[i])) {
           message("send NEW_NRT_POINT to R" + replicaID + " at tcpPort=" + replicaTCPPorts[i]);
           c.out.writeByte(SimpleReplicaNode.CMD_NEW_NRT_POINT);
-          c.out.writeVLong(version);
-          c.out.writeVLong(primaryGen);
+          c.out.writeVLong(version);// version，主要是为了保证顺序性
+          c.out.writeVLong(primaryGen);// 当前的主分片的代，主要是让副本知道主有没有发生变化
           c.out.writeInt(tcpPort);
           c.flush();
           // TODO: we should use multicast to broadcast files out to replicas
@@ -690,16 +690,16 @@ class SimplePrimaryNode extends PrimaryNode {
       }
 
       switch (cmd) {
-        case CMD_FLUSH:
-          handleFlush(in, out, bos);
+        case CMD_FLUSH://收到刷新命令
+          handleFlush(in, out, bos);//处理flush，并向replica发送广播
           break;
 
-        case CMD_FETCH_FILES:
+        case CMD_FETCH_FILES://从replica收到获取文件的命令
           // Replica (other node) is asking us (primary node) for files to copy
           handleFetchFiles(random, socket, in, out, bos);
           break;
 
-        case CMD_INDEXING:
+        case CMD_INDEXING://
           handleIndexing(socket, stop, is, in, out, bos);
           break;
 

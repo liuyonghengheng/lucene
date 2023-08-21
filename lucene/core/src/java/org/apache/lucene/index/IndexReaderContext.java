@@ -20,7 +20,7 @@ import java.util.List;
 
 /**
  * A struct like class that represents a hierarchical relationship between {@link IndexReader}
- * instances.
+ * instances. 代表不同层级的IndexReader之间的关系
  */
 public abstract class IndexReaderContext {
   /** The reader context for this reader's immediate parent, or null if none */
@@ -66,7 +66,7 @@ public abstract class IndexReaderContext {
    * Returns the context's leaves if this context is a top-level context. For convenience, if this
    * is an {@link LeafReaderContext} this returns itself as the only leaf, and it will never return
    * a null value.
-   *
+   * 如果是顶层的context，返回他的叶子，如果是叶子，返回他自己
    * <p>Note: this is convenience method since leaves can always be obtained by walking the context
    * tree using {@link #children()}.
    *
@@ -77,7 +77,7 @@ public abstract class IndexReaderContext {
 
   /**
    * Returns the context's children iff this context is a composite context otherwise <code>null
-   * </code>.
+   * </code>. 如果是复合context返回他的children，否则返回null，注意和上面的leaves区别！
    */
   public abstract List<IndexReaderContext> children();
 }

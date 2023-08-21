@@ -24,13 +24,13 @@ import org.apache.lucene.index.SegmentInfos;
 
 /**
  * Holds incRef'd file level details for one point-in-time segment infos on the primary node.
- *
+ * 记录 primary node 某一时刻的segmentinfos
  * @lucene.experimental
  */
 public class CopyState {
 
   public final Map<String, FileMetaData> files;
-  public final long version;
+  public final long version;//这里的version 一般在SegmentInfos发生变化时加1
   public final long gen;
   public final byte[] infosBytes;
   public final Set<String> completedMergeFiles;

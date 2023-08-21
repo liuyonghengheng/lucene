@@ -28,7 +28,7 @@ import org.apache.lucene.store.Directory;
 
 /**
  * DirectoryReader is an implementation of {@link CompositeReader} that can read indexes in a {@link
- * Directory}.
+ * Directory}.//从给定的路径读取index
  *
  * <p>DirectoryReader instances are usually constructed with a call to one of the static <code>
  * open()</code> methods, e.g. {@link #open(Directory)}.
@@ -39,7 +39,7 @@ import org.apache.lucene.store.Directory;
  * thus not rely on a given document having the same number between sessions.
  *
  * <p><a id="thread-safety"></a>
- *
+ * IndexReader的县城安全非常复杂，多个线程可能并法的调用他的任何方法。不得对IndexReader实例使用同步，如果想用同步，请使用其他实例
  * <p><b>NOTE</b>: {@link IndexReader} instances are completely thread safe, meaning multiple
  * threads can call any of its methods, concurrently. If your application requires external
  * synchronization, you should <b>not</b> synchronize on the <code>IndexReader</code> instance; use
@@ -52,7 +52,7 @@ public abstract class DirectoryReader extends BaseCompositeReader<LeafReader> {
 
   /**
    * Returns a IndexReader reading the index in the given Directory
-   *
+   * 从给定的路径读取index
    * @param directory the index directory
    * @throws IOException if there is a low-level IO error
    */
@@ -69,7 +69,7 @@ public abstract class DirectoryReader extends BaseCompositeReader<LeafReader> {
    *     time-based indices this is usually a descending sort on timestamp). In this case {@code
    *     leafSorter} should sort leaves according to this sort criteria. Providing leafSorter allows
    *     to speed up this particular type of sort queries by early terminating while iterating
-   *     through segments and segments' documents.
+   *     through segments and segments' documents. 已经按某种规则排序的情况下，当遍历段或者段中的文档时可以尽早的终止
    * @throws IOException if there is a low-level IO error
    */
   public static DirectoryReader open(final Directory directory, Comparator<LeafReader> leafSorter)
@@ -79,7 +79,7 @@ public abstract class DirectoryReader extends BaseCompositeReader<LeafReader> {
 
   /**
    * Open a near real time IndexReader from the {@link org.apache.lucene.index.IndexWriter}.
-   *
+   * 为什么这里是近实时的？ 是因为IndexWriter可以获取到 Reader， 从中可以直接读到最新的 segment？
    * @param writer The IndexWriter to open from
    * @return The new IndexReader
    * @throws CorruptIndexException if the index is corrupt
@@ -114,7 +114,7 @@ public abstract class DirectoryReader extends BaseCompositeReader<LeafReader> {
 
   /**
    * Expert: returns an IndexReader reading the index in the given {@link IndexCommit}.
-   *
+   * 从给定的commit点打开
    * @param commit the commit point to open
    * @throws IOException if there is a low-level IO error
    */
@@ -129,7 +129,7 @@ public abstract class DirectoryReader extends BaseCompositeReader<LeafReader> {
    * created with Lucene 7 or newer. Users of this API must be aware that Lucene doesn't guarantee
    * semantic compatibility for indices created with versions older than N-1. All backwards
    * compatibility aside from the file format is optional and applied on a best effort basis.
-   *
+   * 用来做兼容的
    * @param commit the commit point to open
    * @param minSupportedMajorVersion the minimum supported major index version
    * @param leafSorter a comparator for sorting leaf readers. Providing leafSorter is useful for
@@ -152,15 +152,15 @@ public abstract class DirectoryReader extends BaseCompositeReader<LeafReader> {
    * else, return null. The new reader, if not null, will be the same type of reader as the previous
    * one, ie an NRT reader will open a new NRT reader, a MultiReader will open a new MultiReader,
    * etc.
-   *
+   * 如果从上次打开之后index已经发生改变，那么就打开并且返回一个新的reader
    * <p>This method is typically far less costly than opening a fully new <code>DirectoryReader
    * </code> as it shares resources (for example sub-readers) with the provided <code>
    * DirectoryReader</code>, when possible.
-   *
+   * 相比于完全打开一个新的，这个方法一般耗时比较短，因为他会尽可能的复用一些老的reader的资源
    * <p>The provided reader is not closed (you are responsible for doing so); if a new reader is
    * returned you also must eventually close it. Be sure to never close a reader while other threads
    * are still using it; see {@link SearcherManager} to simplify managing this.
-   *
+   * oldReader 不会被关闭，用户来负责关闭它，但是请确保在关闭时没有其他线程在使用它。可以使用SearcherManager来管理它
    * @throws CorruptIndexException if the index is corrupt
    * @throws IOException if there is a low-level IO error
    * @return null if there are no changes; else, a new DirectoryReader instance which you must
@@ -256,7 +256,7 @@ public abstract class DirectoryReader extends BaseCompositeReader<LeafReader> {
    * must be at least one commit in the Directory, else this method throws {@link
    * IndexNotFoundException}. Note that if a commit is in progress while this method is running,
    * that commit may or may not be returned.
-   *
+   * 注意：如果在执行这个方法时，有一个commit正在执行，那么这个commit可能被返回，也可能不被返回！
    * @return a sorted list of {@link IndexCommit}s, from oldest to latest.
    */
   public static List<IndexCommit> listCommits(Directory dir) throws IOException {
@@ -279,7 +279,7 @@ public abstract class DirectoryReader extends BaseCompositeReader<LeafReader> {
         SegmentInfos sis = null;
         try {
           // IOException allowed to throw there, in case
-          // segments_N is corrupt
+          // segments_N is corrupt //如果segments_N已经损坏，则抛出异常
           sis = SegmentInfos.readCommit(dir, fileName, 0);
         } catch (@SuppressWarnings("unused") FileNotFoundException | NoSuchFileException fnfe) {
           // LUCENE-948: on NFS (and maybe others), if
@@ -365,7 +365,7 @@ public abstract class DirectoryReader extends BaseCompositeReader<LeafReader> {
    * Implement this method to support {@link #openIfChanged(DirectoryReader)}. If this reader does
    * not support reopen, return {@code null}, so client code is happy. This should be consistent
    * with {@link #isCurrent} (should always return {@code true}) if reopen is not supported.
-   *
+   * 如果不支持重新打开，则这应该与｛@link#isCurrent｝返回结果保持一致（应始终返回true）。
    * @throws IOException if there is a low-level IO error
    * @return null if there are no changes; else, a new DirectoryReader instance.
    */
@@ -397,24 +397,24 @@ public abstract class DirectoryReader extends BaseCompositeReader<LeafReader> {
    *
    * <p>This method returns the version recorded in the commit that the reader opened. This version
    * is advanced every time a change is made with {@link IndexWriter}.
-   */
+   */ //version 值是记录在 commit中的，IndexWriter 每次修改index ，version 值都会增加！
   public abstract long getVersion();
 
   /**
    * Check whether any new changes have occurred to the index since this reader was opened.
-   *
+   * 检查index是否发生过修改
    * <p>If this reader was created by calling {@link #open}, then this method checks if any further
    * commits (see {@link IndexWriter#commit}) have occurred in the directory.
-   *
+   * 如果reader是通过调用open函数生成的，则这个方法会检查是否有一些commit发生在这个directory中
    * <p>If instead this reader is a near real-time reader (ie, obtained by a call to {@link
    * DirectoryReader#open(IndexWriter)}, or by calling {@link #openIfChanged} on a near real-time
    * reader), then this method checks if either a new commit has occurred, or any new uncommitted
    * changes have taken place via the writer. Note that even if the writer has only performed
-   * merging, this method will still return false.
-   *
+   * merging, this method will still return false. 注意，即使仅仅只执行过merge操作，这个方法同样会返回false！
+   *相反，如果这个reader是近实时的reader，此时，这个方法检查是不是发生了新的commit，或者有任何新的已经发生的还没有提交的修改
    * <p>In any event, if this returns false, you should call {@link #openIfChanged} to get a new
    * reader that sees the changes.
-   *
+   * 在任何情况下，如果这个方法返回 false，说明你可以调用openIfChanged方法来获取一个新的reader了
    * @throws IOException if there is a low-level IO error
    */
   public abstract boolean isCurrent() throws IOException;

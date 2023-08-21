@@ -32,7 +32,7 @@ import org.apache.lucene.util.Version;
 /**
  * Holds all the configuration used by {@link IndexWriter} with few setters for settings that can be
  * changed on an {@link IndexWriter} instance "live".
- *
+ * 可以在线修改的配置
  * @since 4.0
  */
 public class LiveIndexWriterConfig {
@@ -74,19 +74,19 @@ public class LiveIndexWriterConfig {
   /** True if readers should be pooled. */
   protected volatile boolean readerPooling;
 
-  /** {@link FlushPolicy} to control when segments are flushed. */
+  /** {@link FlushPolicy} to control when segments are flushed. */ //flush 策略
   protected volatile FlushPolicy flushPolicy;
 
   /**
    * Sets the hard upper bound on RAM usage for a single segment, after which the segment is forced
-   * to flush.
+   * to flush.// segment flush 的内存上限
    */
   protected volatile int perThreadHardLimitMB;
 
-  /** True if segment flushes should use compound file format */
+  /** True if segment flushes should use compound file format */ //复合文件格式是啥意思？
   protected volatile boolean useCompoundFile = IndexWriterConfig.DEFAULT_USE_COMPOUND_FILE_SYSTEM;
 
-  /** True if calls to {@link IndexWriter#close()} should first do a commit. */
+  /** True if calls to {@link IndexWriter#close()} should first do a commit. */ //close之前需要先执行commit
   protected boolean commitOnClose = IndexWriterConfig.DEFAULT_COMMIT_ON_CLOSE;
 
   /** The sort order to use to write merged segments. */
@@ -100,7 +100,7 @@ public class LiveIndexWriterConfig {
 
   /**
    * if an indexing thread should check for pending flushes on update in order to help out on a full
-   * flush
+   * flush //索引线程是否应该在更新时检查挂起的刷新以帮助进行完全刷新
    */
   protected volatile boolean checkPendingFlushOnUpdate = true;
 
@@ -110,7 +110,7 @@ public class LiveIndexWriterConfig {
   /** Amount of time to wait for merges returned by MergePolicy.findFullFlushMerges(...) */
   protected volatile long maxFullFlushMergeWaitMillis;
 
-  /** The IndexWriter event listener to record key events * */
+  /** The IndexWriter event listener to record key events * */ //记录关键事件
   protected IndexWriterEventListener eventListener;
 
   // used by IndexWriterConfig
@@ -147,35 +147,35 @@ public class LiveIndexWriterConfig {
    * Determines the amount of RAM that may be used for buffering added documents and deletions
    * before they are flushed to the Directory. Generally for faster indexing performance it's best
    * to flush by RAM usage instead of document count and use as large a RAM buffer as you can.
-   *
+   * 通常，为了获得更快的索引性能，最好根据RAM使用情况而不是文档计数进行刷新，并尽可能使用大的RAM缓冲区。
    * <p>When this is set, the writer will flush whenever buffered documents and deletions use this
    * much RAM. Pass in {@link IndexWriterConfig#DISABLE_AUTO_FLUSH} to prevent triggering a flush
    * due to RAM usage. Note that if flushing by document count is also enabled, then the flush will
    * be triggered by whichever comes first.
-   *
+   * 可以使用DISABLE_AUTO_FLUSH来禁止由于RAM使用上限的自动触发。如果根据文档条数的刷新也被设置，不管那个先被处罚就开始执行
    * <p>The maximum RAM limit is inherently determined by the JVMs available memory. Yet, an {@link
    * IndexWriter} session can consume a significantly larger amount of memory than the given RAM
    * limit since this limit is just an indicator when to flush memory resident documents to the
    * Directory. Flushes are likely happen concurrently while other threads adding documents to the
    * writer. For application stability the available memory in the JVM should be significantly
-   * larger than the RAM buffer used for indexing.
-   *
+   * larger than the RAM buffer used for indexing. //这个使用上限的设置，并不以意味着真实使用的内存，因为他只是一个内存使用的指示和预兆，
+   * 刷新程序可以根据当前使用量是否大于这个值来决定是否刷新，实际上使用值可能比这个限制大的多。刷新的时候也有并法写入，所以可用内存要比RAMbuffer大的多
    * <p><b>NOTE</b>: the account of RAM usage for pending deletions is only approximate.
    * Specifically, if you delete by Query, Lucene currently has no way to measure the RAM usage of
    * individual Queries so the accounting will under-estimate and you should compensate by either
-   * calling commit() or refresh() periodically yourself.
-   *
+   * calling commit() or refresh() periodically yourself.对未决删除的RAM使用的说明只是近似的。
+   * 特别是delete by Query ，是没办法计算查询内存使用量的，所以自己补偿通过周期性调用这两函数 commit() 或者 refresh()
    * <p><b>NOTE</b>: It's not guaranteed that all memory resident documents are flushed once this
    * limit is exceeded. Depending on the configured {@link FlushPolicy} only a subset of the
    * buffered documents are flushed and therefore only parts of the RAM buffer is released.
-   *
+   * 不能保证一旦超过此限制，所有驻留在内存中的文档都会被刷新。依赖于刷新策略，只有缓存的子集会被刷新，因此也只能释放部分的内存缓存。
    * <p>The default value is {@link IndexWriterConfig#DEFAULT_RAM_BUFFER_SIZE_MB}.
    *
    * <p>Takes effect immediately, but only the next time a document is added, updated or deleted.
-   *
+   * 立即生效，但仅在下次添加、更新或删除文档时生效。
    * @see IndexWriterConfig#setRAMPerThreadHardLimitMB(int)
    * @throws IllegalArgumentException if ramBufferSize is enabled but non-positive, or it disables
-   *     ramBufferSize when maxBufferedDocs is already disabled
+   *     ramBufferSize when maxBufferedDocs is already disabled //
    */
   public synchronized LiveIndexWriterConfig setRAMBufferSizeMB(double ramBufferSizeMB) {
     if (ramBufferSizeMB != IndexWriterConfig.DISABLE_AUTO_FLUSH && ramBufferSizeMB <= 0.0) {
@@ -198,16 +198,16 @@ public class LiveIndexWriterConfig {
   /**
    * Determines the minimal number of documents required before the buffered in-memory documents are
    * flushed as a new Segment. Large values generally give faster indexing.
-   *
+   * 配置刷新segmnet的文档数量
    * <p>When this is set, the writer will flush every maxBufferedDocs added documents. Pass in
    * {@link IndexWriterConfig#DISABLE_AUTO_FLUSH} to prevent triggering a flush due to number of
    * buffered documents. Note that if flushing by RAM usage is also enabled, then the flush will be
    * triggered by whichever comes first.
-   *
+   * 也可以使用DISABLE_AUTO_FLUSH配置关闭。
    * <p>Disabled by default (writer flushes by RAM usage).
-   *
+   * 默认关闭
    * <p>Takes effect immediately, but only the next time a document is added, updated or deleted.
-   *
+   *立即生效，但仅在下次添加、更新或删除文档时生效。
    * @see #setRAMBufferSizeMB(double)
    * @throws IllegalArgumentException if maxBufferedDocs is enabled but smaller than 2, or it
    *     disables maxBufferedDocs when ramBufferSize is already disabled
@@ -239,10 +239,10 @@ public class LiveIndexWriterConfig {
    * Its role is to select which merges to do, if any, and return a {@link
    * MergePolicy.MergeSpecification} describing the merges. It also selects merges to do for
    * forceMerge.
-   *
+   * 他的角色是选择那些需要执行的merge，如果有就返回MergeSpecification。也会选择学要执行merge的 forceMerge
    * <p>Takes effect on subsequent merge selections. Any merges in flight or any merges already
    * registered by the previous {@link MergePolicy} are not affected.
-   */
+   */// 对后续合并选择生效。任何正在执行的的merge，或者已经注册的merge都不会受影响。
   public LiveIndexWriterConfig setMergePolicy(MergePolicy mergePolicy) {
     if (mergePolicy == null) {
       throw new IllegalArgumentException("mergePolicy must not be null");

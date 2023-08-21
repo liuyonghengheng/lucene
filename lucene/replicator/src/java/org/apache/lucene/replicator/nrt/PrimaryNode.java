@@ -54,13 +54,13 @@ public abstract class PrimaryNode extends Node {
   // Current NRT segment infos, incRef'd with IndexWriter.deleter:
   private SegmentInfos curInfos;
 
-  protected final IndexWriter writer;
+  protected final IndexWriter writer; //有写，也有读，replicanode是没有写的
 
   // IncRef'd state of the last published NRT point; when a replica comes asking, we give it this as
   // the current NRT point:
   private CopyState copyState;
 
-  protected final long primaryGen;
+  protected final long primaryGen; //这个index的主分片每次被启动，对应的主分片代数就会增加
   private int remoteCloseTimeoutMs = -1;
 
   /**
@@ -135,7 +135,7 @@ public abstract class PrimaryNode extends Node {
 
   /**
    * Returns the current primary generation, which is incremented each time a new primary is started
-   * for this index
+   * for this index 这个index的主分片每次被启动，对应的主分片代数就会增加
    */
   public long getPrimaryGen() {
     return primaryGen;
@@ -152,7 +152,7 @@ public abstract class PrimaryNode extends Node {
   // SegmentInfos.  To fix this "properly" I think IW.inc/decRefDeleter must also incread the
   // ReaderPool entry
 
-  /**
+  /** 把所有index操作都写入磁盘，并且打开一个新的近实时的reader。新的NRT点，以使更改对搜索可见。如果有更改，则返回true。
    * Flush all index operations to disk and opens a new near-real-time reader. new NRT point, to
    * make the changes visible to searching. Returns true if there were changes.
    */

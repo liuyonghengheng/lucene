@@ -458,26 +458,26 @@ public class IndexWriter
    * Expert: returns a readonly reader, covering all committed as well as un-committed changes to
    * the index. This provides "near real-time" searching, in that changes made during an IndexWriter
    * session can be quickly made available for searching without closing the writer nor calling
-   * {@link #commit}.
-   *
+   * {@link #commit}.Expert：返回一个只读读取器，覆盖索引中所有已提交和未提交的更改。这提供了“近实时”的搜索，
+   * 因为在IndexWriter会话期间所做的更改可以快速用于搜索，而无需关闭writer或调用｛@link#commit｝
    * <p>Note that this is functionally equivalent to calling {#flush} and then opening a new reader.
    * But the turnaround time of this method should be faster since it avoids the potentially costly
-   * {@link #commit}.
-   *
+   * {@link #commit}.注意：这在功能上等同于调用flush然后打开一个新的reader，
+   * 但这种方法的周转时间应该更快，因为它避免了潜在的昂贵{@link#commit}
    * <p>You must close the {@link IndexReader} returned by this method once you are done using it.
-   *
+   * 使用完此方法返回的｛@link IndexReader｝后，必须关闭它。
    * <p>It's <i>near</i> real-time because there is no hard guarantee on how quickly you can get a
    * new reader after making changes with IndexWriter. You'll have to experiment in your situation
    * to determine if it's fast enough. As this is a new and experimental feature, please report back
    * on your findings so we can learn, improve and iterate.
-   *
+   * 之所以称之为近实时，是因为IndexWriter 发生修改之后，无法硬性的保证你可以有多快获取到新的reader，。。。。。，这是一个经验性的特征
    * <p>The resulting reader supports {@link DirectoryReader#openIfChanged}, but that call will
    * simply forward back to this method (though this may change in the future).
    *
    * <p>The very first time this method is called, this writer instance will make every effort to
    * pool the readers that it opens for doing merges, applying deletes, etc. This means additional
-   * resources (RAM, file descriptors, CPU time) will be consumed.
-   *
+   * resources (RAM, file descriptors, CPU time) will be consumed.当这个方法被调用的第一时间？还是第一次被调用？，
+   * writer实例会尽一切努力将打开的readers集中起来，去做merge或者delete ，这意味着额外的内存cpu文件描述符会被消耗。
    * <p>For lower latency on reopening a reader, you should call {@link
    * IndexWriterConfig#setMergedSegmentWarmer} to pre-warm a newly merged segment before it's
    * committed to the index. This is important for minimizing index-to-search delay after a large
@@ -488,8 +488,8 @@ public class IndexWriter
    *
    * <p><b>NOTE</b>: Once the writer is closed, any outstanding readers may continue to be used.
    * However, if you attempt to reopen any of those readers, you'll hit an {@link
-   * AlreadyClosedException}.
-   *
+   * AlreadyClosedException}.一旦writer被关闭，任何已经产生的readers可以继续被使用，
+   * 但是，如果你试图重新打开任何一个readers，你都将触发异常。
    * @lucene.experimental
    * @return IndexReader that covers entire index plus all changes made so far by this IndexWriter
    *     instance
@@ -548,11 +548,11 @@ public class IndexWriter
     boolean success2 = false;
     try {
       /* This is the essential part of the getReader method. We need to take care of the following things:
-       *  - flush all currently in-memory DWPTs to disk
-       *  - apply all deletes & updates to new and to the existing DWPTs
+       *  - flush all currently in-memory DWPTs to disk 刷新所有内存中的DWPTs到磁盘中
+       *  - apply all deletes & updates to new and to the existing DWPTs 把删除和更新应用到新的和已经存在的DWPTs
        *  - prevent flushes and applying deletes of concurrently indexing DWPTs to be applied
        *  - open a SDR on the updated SIS
-       *
+       * 这是getReader方法的重要部分，我们需要注意以上几个事情：
        * in order to prevent concurrent flushes we call DocumentsWriter#flushAllThreads that swaps out the deleteQueue
        *  (this enforces a happens before relationship between this and the subsequent full flush) and informs the
        * FlushControl (#markForFullFlush()) that it should prevent any new DWPTs from flushing until we are \
@@ -5784,7 +5784,7 @@ public class IndexWriter
    * delete (if present) to IndexWriter. The actual publishing operation is synced on {@code IW ->
    * BDS} so that the {@link SegmentInfo}'s delete generation is always
    * GlobalPacket_deleteGeneration + 1
-   *
+   * 将刷新的段、段专用删除（如果有）及其关联的全局删除（如果存在）发布到IndexWriter。
    * @param forced if <code>true</code> this call will block on the ticket queue if the lock is held
    *     by another thread. if <code>false</code> the call will try to acquire the queue lock and
    *     exits if it's held by another thread.

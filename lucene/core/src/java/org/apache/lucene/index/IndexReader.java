@@ -37,28 +37,28 @@ import org.apache.lucene.util.Bits;
  * DirectoryReader#openIfChanged(DirectoryReader)} since the new reader will share resources with
  * the previous one when possible. Search of an index is done entirely through this abstract
  * interface, so that any subclass which implements it is searchable.
- *
+ * 一个时间点只能看到一个可用的index, 任何对 index 修改都需要打开一个新的IndexReader，或者重新打开（比如调用openIfChanged）之后才能被看到
  * <p>There are two different types of IndexReaders:
- *
+ * 组合模式，树形结构
  * <ul>
  *   <li>{@link LeafReader}: These indexes do not consist of several sub-readers, they are atomic.
- *       They support retrieval of stored fields, doc values, terms, and postings.
+ *       They support retrieval of stored fields, doc values, terms, and postings.//叶子Reader
  *   <li>{@link CompositeReader}: Instances (like {@link DirectoryReader}) of this reader can only
  *       be used to get stored fields from the underlying LeafReaders, but it is not possible to
  *       directly retrieve postings. To do that, get the sub-readers via {@link
- *       CompositeReader#getSequentialSubReaders}.
+ *       CompositeReader#getSequentialSubReaders}.//复合 Reader只能获取到fields，并且是从底层的LeafReaders获取的
  * </ul>
  *
  * <p>IndexReader instances for indexes on disk are usually constructed with a call to one of the
  * static <code>DirectoryReader.open()</code> methods, e.g. {@link
  * DirectoryReader#open(org.apache.lucene.store.Directory)}. {@link DirectoryReader} implements the
  * {@link CompositeReader} interface, it is not possible to directly get postings.
- *
+ * IndexReader实例一般都是通过地爱用一些静态函数来创建的，比如。。。。。。
  * <p>For efficiency, in this API documents are often referred to via <i>document numbers</i>,
  * non-negative integers which each name a unique document in the index. These document numbers are
  * ephemeral -- they may change as documents are added to and deleted from an index. Clients should
  * thus not rely on a given document having the same number between sessions.
- *
+ * 为了效率，文档又有一些编号作为索引，但是这些编号是短暂的，当文档被添加或者删除时，他们可能会修改。
  * <p><a id="thread-safety"></a>
  *
  * <p><b>NOTE</b>: {@link IndexReader} instances are completely thread safe, meaning multiple
@@ -135,14 +135,14 @@ public abstract class IndexReader implements Closeable {
     void addClosedListener(ClosedListener listener);
   }
 
-  /** A cache key identifying a resource that is being cached on. */
+  /** A cache key identifying a resource that is being cached on. *///缓存的key
   public static final class CacheKey {
     CacheKey() {} // only instantiable by core impls
   }
 
   /**
    * A listener that is called when a resource gets closed.
-   *
+   * close监听器
    * @lucene.experimental
    */
   @FunctionalInterface
@@ -163,7 +163,7 @@ public abstract class IndexReader implements Closeable {
    * on construction of the parent. When this reader is closed, it will mark all registered parents
    * as closed, too. The references to parent readers are weak only, so they can be GCed once they
    * are no longer in use.
-   *
+   * 当当前的reader关闭时，也会将所有的父reader标记为关闭。都是弱引用
    * @lucene.experimental
    */
   public final void registerParentReader(IndexReader reader) {
@@ -184,9 +184,9 @@ public abstract class IndexReader implements Closeable {
     synchronized (parentReaders) {
       for (IndexReader parent : parentReaders) {
         parent.closedByChild = true;
-        // cross memory barrier by a fake write:
+        // cross memory barrier by a fake write://通过伪写入跨越内存屏障，保证之前的操作都已经完成并写入内存，再执行下一条指令
         parent.refCount.addAndGet(0);
-        // recurse:
+        // recurse://递归：
         parent.reportCloseToParentReaders();
       }
     }
@@ -195,7 +195,7 @@ public abstract class IndexReader implements Closeable {
   /** Expert: returns the current refCount for this reader */
   public final int getRefCount() {
     // NOTE: don't ensureOpen, so that callers can see
-    // refCount is 0 (reader is closed)
+    // refCount is 0 (reader is closed) 如果是关闭的话，返回0
     return refCount.get();
   }
 
@@ -206,13 +206,13 @@ public abstract class IndexReader implements Closeable {
    * never be closed. Note that {@link #close} simply calls decRef(), which means that the
    * IndexReader will not really be closed until {@link #decRef} has been called for all outstanding
    * references.
-   *
+   * 增加引用计数，引用计数用于确定能否安全的关闭reader。应定要在finally子句中执行执行相应的decRef，否则的话可能永远都无法被关闭了。
    * @see #decRef
    * @see #tryIncRef
    */
   public final void incRef() {
     if (!tryIncRef()) {
-      ensureOpen();
+      ensureOpen();//说明已经关闭，直接抛出异常
     }
   }
 
@@ -222,7 +222,7 @@ public abstract class IndexReader implements Closeable {
    * otherwise <code>false</code>. If this method returns <code>false</code> the reader is either
    * already closed or is currently being closed. Either way this reader instance shouldn't be used
    * by an application unless <code>true</code> is returned.
-   *
+   * return false 说明要么在关闭，要么已经关闭。也就是说返回false，那么这个实例是不能被使用的！
    * <p>RefCounts are used to determine when a reader can be closed safely, i.e. as soon as there
    * are no more references. Be sure to always call a corresponding {@link #decRef}, in a finally
    * clause; otherwise the reader may never be closed. Note that {@link #close} simply calls
@@ -239,7 +239,7 @@ public abstract class IndexReader implements Closeable {
         return true;
       }
     }
-    return false;
+    return false; //refCount<0 说明已经关闭
   }
 
   /**
@@ -258,13 +258,13 @@ public abstract class IndexReader implements Closeable {
     }
 
     final int rc = refCount.decrementAndGet();
-    if (rc == 0) {
+    if (rc == 0) { //减到0,可以关闭
       closed = true;
       try (Closeable finalizer = this::reportCloseToParentReaders;
           Closeable finalizer1 = this::notifyReaderClosedListeners) {
-        doClose();
+        doClose(); //执行close，也说明closed = true的情况下，可能已经关闭也可能正在关闭。
       }
-    } else if (rc < 0) {
+    } else if (rc < 0) { //说明已经减多了，都已经被关闭了！
       throw new IllegalStateException(
           "too many decRef calls: refCount is " + rc + " after decrement");
     }
@@ -311,7 +311,7 @@ public abstract class IndexReader implements Closeable {
   /**
    * Retrieve term vectors for this document, or null if term vectors were not indexed. The returned
    * Fields instance acts like a single-document inverted index (the docID will be 0).
-   *
+   * 返回多列
    * @deprecated use {@link #termVectors()} to retrieve one or more documents
    */
   @Deprecated
@@ -320,7 +320,7 @@ public abstract class IndexReader implements Closeable {
   /**
    * Retrieve term vector for this document and field, or null if term vectors were not indexed. The
    * returned Fields instance acts like a single-document inverted index (the docID will be 0).
-   *
+   * 返回指定的一列
    * @deprecated use {@link #termVectors()} to retrieve one or more documents
    */
   @Deprecated
@@ -337,7 +337,7 @@ public abstract class IndexReader implements Closeable {
    *
    * <p>This call never returns {@code null}, even if no term vectors were indexed. The returned
    * instance should only be used by a single thread.
-   *
+   * 返回结果只能被一个线程使用？？？
    * <p>Example:
    *
    * <pre class="prettyprint">
@@ -363,7 +363,7 @@ public abstract class IndexReader implements Closeable {
   /**
    * Returns one greater than the largest possible document number. This may be used to, e.g.,
    * determine how big to allocate an array which will have an element for every document number in
-   * an index.
+   * an index. 返回 最大的编号+1,一般用于数组资源申请
    */
   public abstract int maxDoc();
 
@@ -388,16 +388,16 @@ public abstract class IndexReader implements Closeable {
 
   /**
    * Returns the stored fields of the <code>n</code><sup>th</sup> <code>Document</code> in this
-   * index. This is just sugar for using {@link DocumentStoredFieldVisitor}.
+   * index. This is just sugar for using {@link DocumentStoredFieldVisitor}. 语法糖
    *
    * <p><b>NOTE:</b> for performance reasons, this method does not check if the requested document
    * is deleted, and therefore asking for a deleted document may yield unspecified results. Usually
    * this is not required, however you can test if the doc is deleted by checking the {@link Bits}
-   * returned from {@link MultiBits#getLiveDocs}.
-   *
+   * returned from {@link MultiBits#getLiveDocs}.为了性能，这个方法没有检查请求的文档是否被删除，
+   * 因此要删除的文档可能会产生未指定的结果。通常并不要求，但是你可以通过检查getLiveDocs的返回值Bits，来确认是都被删除
    * <p><b>NOTE:</b> only the content of a field is returned, if that field was stored during
    * indexing. Metadata like boost, omitNorm, IndexOptions, tokenized, etc., are not preserved.
-   *
+   * 如果field
    * @throws CorruptIndexException if the index is corrupt
    * @throws IOException if there is a low-level IO error
    * @deprecated use {@link #storedFields()} to retrieve one or more documents
@@ -456,14 +456,14 @@ public abstract class IndexReader implements Closeable {
   /**
    * Closes files associated with this index. Also saves any new deletions to disk. No other methods
    * should be called after this has been called.
-   *
+   * 当这个方法被调用之后，其他的方法都不应该再被调用
    * @throws IOException if there is a low-level IO error
    */
   @Override
   public final synchronized void close() throws IOException {
     if (!closed) {
       decRef();
-      closed = true;
+      closed = true; //实际上可能并没有被关闭，因为refcount可能不是0！
     }
   }
 
@@ -473,7 +473,7 @@ public abstract class IndexReader implements Closeable {
   /**
    * Expert: Returns the root {@link IndexReaderContext} for this {@link IndexReader}'s sub-reader
    * tree.
-   *
+   * 返回子树的根
    * <p>Iff this reader is composed of sub readers, i.e. this reader being a composite reader, this
    * method returns a {@link CompositeReaderContext} holding the reader's direct children as well as
    * a view of the reader tree's atomic leaf contexts. All sub- {@link IndexReaderContext} instances
@@ -484,14 +484,14 @@ public abstract class IndexReader implements Closeable {
    *
    * <p>Note: Any of the sub-{@link CompositeReaderContext} instances referenced from this top-level
    * context do not support {@link CompositeReaderContext#leaves()}. Only the top-level context
-   * maintains the convenience leaf-view for performance reasons.
+   * maintains the convenience leaf-view for performance reasons. 只有最顶级的的可以调用 CompositeReaderContext#leaves()
    */
   public abstract IndexReaderContext getContext();
 
   /**
    * Returns the reader's leaves, or itself if this reader is atomic. This is a convenience method
    * calling {@code this.getContext().leaves()}.
-   *
+   * 返回这个reader的所有的叶子readers，如果他自己就是原子的话就返回他自己。
    * @see IndexReaderContext#leaves()
    */
   public final List<LeafReaderContext> leaves() {
@@ -514,7 +514,7 @@ public abstract class IndexReader implements Closeable {
    * Returns the number of documents containing the <code>term</code>. This method returns 0 if the
    * term or field does not exists. This method does not take into account deleted documents that
    * have not yet been merged away.
-   *
+   * 包含这个term的doc的数量，注意：此方法不考虑尚未合并的已删除文档！
    * @see TermsEnum#docFreq()
    */
   public abstract int docFreq(Term term) throws IOException;
@@ -529,7 +529,7 @@ public abstract class IndexReader implements Closeable {
   /**
    * Returns the sum of {@link TermsEnum#docFreq()} for all terms in this field. Note that, just
    * like other term measures, this measure does not take deleted documents into account.
-   *
+   * 所有term的数量的和
    * @see Terms#getSumDocFreq()
    */
   public abstract long getSumDocFreq(String field) throws IOException;
@@ -537,7 +537,7 @@ public abstract class IndexReader implements Closeable {
   /**
    * Returns the number of documents that have at least one term for this field. Note that, just
    * like other term measures, this measure does not take deleted documents into account.
-   *
+   * 包含这个filed的文档的个数
    * @see Terms#getDocCount()
    */
   public abstract int getDocCount(String field) throws IOException;
@@ -545,7 +545,7 @@ public abstract class IndexReader implements Closeable {
   /**
    * Returns the sum of {@link TermsEnum#totalTermFreq} for all terms in this field. Note that, just
    * like other term measures, this measure does not take deleted documents into account.
-   *
+   * totalTermFreq 的和
    * @see Terms#getSumTotalTermFreq()
    */
   public abstract long getSumTotalTermFreq(String field) throws IOException;
