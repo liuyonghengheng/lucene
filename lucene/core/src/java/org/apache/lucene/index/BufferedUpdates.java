@@ -31,8 +31,10 @@ import org.apache.lucene.util.RamUsageEstimator;
  * hold buffered pending deletes and updates against the to-be-flushed segment. Once the deletes and
  * updates are pushed (on flush in DocumentsWriter), they are converted to a {@link
  * FrozenBufferedUpdates} instance and pushed to the {@link BufferedUpdatesStream}.
+ * 保存单个段的缓冲删除和更新（按文档ID、term 或查询）。这用于保存针对要刷新的段的缓冲pending deletes和updates。
+ * 一旦删除和更新被推送后（在DocumentsWriter中进行刷新时），它们将转换为FrozenBufferedUpdates实例并推送到BufferedUpdatesStream。
  */
-
+// 删除和更新都有
 // NOTE: instances of this class are accessed either via a private
 // instance on DocumentWriterPerThread, or via sync'd code by
 // DocumentsWriterDeleteQueue
@@ -126,6 +128,8 @@ class BufferedUpdates implements Accountable {
     }
   }
 
+  /* 添加需要删除的term
+  * */
   public void addTerm(Term term, int docIDUpto) {
     Integer current = deleteTerms.get(term);
     if (current != null && docIDUpto < current) {
@@ -150,6 +154,7 @@ class BufferedUpdates implements Accountable {
     }
   }
 
+  /*添加数值类型的更新操作*/
   void addNumericUpdate(NumericDocValuesUpdate update, int docIDUpto) {
     FieldUpdatesBuffer buffer =
         fieldUpdates.computeIfAbsent(
@@ -162,6 +167,7 @@ class BufferedUpdates implements Accountable {
     numFieldUpdates.incrementAndGet();
   }
 
+  /*添加二进制类型的更新操作*/
   void addBinaryUpdate(BinaryDocValuesUpdate update, int docIDUpto) {
     FieldUpdatesBuffer buffer =
         fieldUpdates.computeIfAbsent(

@@ -204,8 +204,8 @@ final class DocumentsWriterFlushControl implements Accountable, Closeable {
 
   DocumentsWriterPerThread doAfterDocument(DocumentsWriterPerThread perThread) {
     final long delta = perThread.getCommitLastBytesUsedDelta();
-    // in order to prevent contention in the case of many threads indexing small documents
-    // we skip ram accounting unless the DWPT accumulated enough ram to be worthwhile
+    // in order to prevent contention in the case of many threads indexing small documents // 为了防止在许多线程索引小文档的情况下发生争用，
+    // we skip ram accounting unless the DWPT accumulated enough ram to be worthwhile // 我们跳过ram记帐，除非DWPT积累了足够的ram
     if (config.getMaxBufferedDocs() == IndexWriterConfig.DISABLE_AUTO_FLUSH
         && delta < ramBufferGranularity()) {
       // Skip accounting for now, we'll come back to it later when the delta is bigger

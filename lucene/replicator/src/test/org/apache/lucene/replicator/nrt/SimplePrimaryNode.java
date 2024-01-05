@@ -344,7 +344,7 @@ class SimplePrimaryNode extends PrimaryNode {
 
     message("now flush; " + replicaIDs.length + " replicas");
 
-    if (flushAndRefresh()) { //这里面执行刷新?
+    if (flushAndRefresh()) { //这里面执行刷新
       // Something did get flushed (there were indexing ops since the last flush):
 
       verifyAtLeastMarkerCount(atLeastMarkerCount, null);

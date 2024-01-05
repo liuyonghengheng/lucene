@@ -89,17 +89,17 @@ final class DocumentsWriter implements Closeable, Accountable {
 
   private final LiveIndexWriterConfig config;
 
-  private final AtomicInteger numDocsInRAM = new AtomicInteger(0);
+  private final AtomicInteger numDocsInRAM = new AtomicInteger(0);// 记录内存中的doc数量，写入会增加，flush会减少
 
   // TODO: cut over to BytesRefHash in BufferedDeletes
   volatile DocumentsWriterDeleteQueue deleteQueue;
   private final DocumentsWriterFlushQueue ticketQueue = new DocumentsWriterFlushQueue();
-  /*
+  /* 在full flush期间我们会保存changes，因为在我们释放所有的changes之前，IW可能操作还没完成。
    * we preserve changes during a full flush since IW might not checkout before
    * we release all changes. NRT Readers otherwise suddenly return true from
    * isCurrent while there are actually changes currently committed. See also
-   * #anyChanges() & #flushAllThreads
-   */
+   * #anyChanges() & #flushAllThreads 除此之外，近实时Readers会从isCurrent方法中突然返回true,如果现在changes确实已经提交了。
+   */ //也可以看一下 anyChanges() flushAllThreads 这俩方法。
   private volatile boolean pendingChangesInCurrentFullFlush;
 
   final DocumentsWriterPerThreadPool perThreadPool;
@@ -172,6 +172,7 @@ final class DocumentsWriter implements Closeable, Accountable {
         // never apply deletes during full flush this breaks happens before relationship
         && deleteQueue.isOpen()
         // if it's closed then it's already fully applied and we have a new delete queue
+        // 如果它已关闭，那么它已经完全应用，并且我们有一个新的删除队列
         && flushControl.getAndResetApplyAllDeletes()) {
       if (ticketQueue.addDeletes(deleteQueue)) {
         flushNotifications.onDeletesApplied(); // apply deletes event forces a purge
@@ -335,18 +336,18 @@ final class DocumentsWriter implements Closeable, Accountable {
   }
 
   boolean anyChanges() {
-    /*
+    /* 修改可能在DWPT中或者在删除队列中。
      * changes are either in a DWPT or in the deleteQueue.
-     * yet if we currently flush deletes and / or dwpt there
-     * could be a window where all changes are in the ticket queue
-     * before they are published to the IW. ie we need to check if the
-     * ticket queue has any tickets.
+     * yet if we currently flush deletes and / or dwpt there 如果我们此时 flush  deletes或者DWPT，
+     * could be a window where all changes are in the ticket queue  那么在将所有更改发布到IW之前，
+     * before they are published to the IW. ie we need to check if the 可能会有一个窗口，其中所有更改都在ticket队列中。
+     * ticket queue has any tickets. 我们需要检查ticket queue 是否为空。
      */
     boolean anyChanges =
-        numDocsInRAM.get() != 0
-            || anyDeletions()
-            || ticketQueue.hasTickets()
-            || pendingChangesInCurrentFullFlush;
+        numDocsInRAM.get() != 0  //DWPT
+            || anyDeletions() // deletes
+            || ticketQueue.hasTickets() //ticket
+            || pendingChangesInCurrentFullFlush; // flush时候 已经有anyChanges
     if (infoStream.isEnabled("DW") && anyChanges) {
       infoStream.message(
           "DW",
@@ -490,7 +491,7 @@ final class DocumentsWriter implements Closeable, Accountable {
           try {
             // flush concurrently without locking
             final FlushedSegment newSegment = flushingDWPT.flush(flushNotifications);
-            ticketQueue.addSegment(ticket, newSegment);
+            ticketQueue.addSegment(ticket, newSegment);//将ticket和对应的newSegment 添加到ticketQueue
             dwptSuccess = true;
           } finally {
             subtractFlushedNumDocs(flushingDocsInRam);
@@ -639,11 +640,11 @@ final class DocumentsWriter implements Closeable, Accountable {
     return true;
   }
 
-  /*
+  /* flushAllThreads 通过 fullFlushLock 进行同步操作，刷新所有的线程是一个两阶段的操作，
    * FlushAllThreads is synced by IW fullFlushLock. Flushing all threads is a
    * two stage operation; the caller must ensure (in try/finally) that finishFlush
    * is called after this method, to release the flush lock in DWFlushControl
-   */
+   */// 调用者必须保证在调用完这个方法之后要调用finishFlush方法，从而释放锁
   long flushAllThreads() throws IOException {
     final DocumentsWriterDeleteQueue flushingDeleteQueue;
     if (infoStream.isEnabled("DW")) {

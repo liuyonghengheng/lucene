@@ -29,8 +29,8 @@ import org.apache.lucene.util.IOConsumer;
  */
 final class DocumentsWriterFlushQueue {
   private final Queue<FlushTicket> queue = new ArrayDeque<>();
-  // we track tickets separately since count must be present even before the ticket is
-  // constructed ie. queue.size would not reflect it.
+  // we track tickets separately since count must be present even before the ticket is，我们分开跟踪tickets 数量，是因为在
+  // constructed ie. queue.size would not reflect it. 在ticket被构造之前 count 就必须存在和使用，所以queue.size无法反映count。
   private final AtomicInteger ticketCount = new AtomicInteger();
   private final ReentrantLock purgeLock = new ReentrantLock();
 
@@ -65,13 +65,15 @@ final class DocumentsWriterFlushQueue {
 
   synchronized FlushTicket addFlushTicket(DocumentsWriterPerThread dwpt) throws IOException {
     // Each flush is assigned a ticket in the order they acquire the ticketQueue
-    // lock
+    // lock 每个flush都会分配一个ticket，并且是按照他们获取到ticketQueue 锁的顺序获取的。
     incTickets();
     boolean success = false;
     try {
       // prepare flush freezes the global deletes - do in synced block!
+      // prepareFlush 会冻结 global deletes，并生成冻结的globalUpdates
+      // 将当前 deleteQueue tail和 deleteSlice 以及 golobalSlice 对齐，并将删除应用到updates
       final FlushTicket ticket = new FlushTicket(dwpt.prepareFlush(), true);
-      queue.add(ticket);
+      queue.add(ticket);//将ticket添加到queue
       success = true;
       return ticket;
     } finally {
@@ -105,7 +107,7 @@ final class DocumentsWriterFlushQueue {
       final FlushTicket head;
       final boolean canPublish;
       synchronized (this) {
-        head = queue.peek();
+        head = queue.peek(); //拿到队头，判断是否可以publish，如果可以，则把处理之后从队列中删除，然后循环执行，知道找到不能publish的ticket，跳出循环
         canPublish = head != null && head.canPublish(); // do this synced
       }
       if (canPublish) {

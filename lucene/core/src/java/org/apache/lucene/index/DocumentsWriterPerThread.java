@@ -86,13 +86,13 @@ final class DocumentsWriterPerThread implements Accountable {
     }
   }
 
-  /**
+  /** 调用触发条件：当我们正在更新index files时，正好遇到异常，而且必须放弃目前缓存的所有的docs。这个函数会重置状态，并且放弃所有的从上次flush开始到目前为止的所有的docs
    * Called if we hit an exception at a bad time (when updating the index files) and must discard
    * all currently buffered docs. This resets our state, discarding any docs added since last flush.
    */
   void abort() throws IOException {
     aborted = true;
-    pendingNumDocs.addAndGet(-numDocsInRAM);
+    pendingNumDocs.addAndGet(-numDocsInRAM);// 剪掉已经缓存的文档数量
     try {
       if (infoStream.isEnabled("DWPT")) {
         infoStream.message("DWPT", "now abort");
@@ -245,7 +245,7 @@ final class DocumentsWriterPerThread implements Accountable {
           }
         }
         allDocsIndexed = true;
-        return finishDocuments(deleteNode, docsInRamBefore);
+        return finishDocuments(deleteNode, docsInRamBefore);//记录删除node 和 对应的 docId
       } finally {
         if (!allDocsIndexed && !aborted) {
           // the iterator threw an exception that is not aborting
@@ -266,6 +266,12 @@ final class DocumentsWriterPerThread implements Accountable {
      *
      * the updated slice we get from 1. holds all the deletes that have occurred
      * since we updated the slice the last time.
+     * 我们真正的完成一个doc 分成两步：
+     * 1. 把删除放入删除队列并更新slice。
+     * 2. 增加DWPT内部私有的 docid，这个doc id 是 DocumentsWriterDeleteQueue.nextSeqNo,是全局的！
+     * 和 docIdUpTo 又不是一回事，
+     * 更新的slice 数据到底是啥： 是从上次更新slice开始直到现在所发生的所有的删除操作，
+     * 注意这里所有的删除是记录在deleteQueue中的
      */
     // Apply delTerm only after all indexing has
     // succeeded, but apply it only to docs prior to when
@@ -274,7 +280,7 @@ final class DocumentsWriterPerThread implements Accountable {
     if (deleteNode != null) {
       seqNo = deleteQueue.add(deleteNode, deleteSlice);
       assert deleteSlice.isTail(deleteNode) : "expected the delete term as the tail item";
-      deleteSlice.apply(pendingUpdates, docIdUpTo);
+      deleteSlice.apply(pendingUpdates, docIdUpTo);// 将deleteSlice头尾部分 应用到局部的pendingUpdates
       return seqNo;
     } else {
       seqNo = deleteQueue.updateSlice(deleteSlice);
@@ -326,11 +332,13 @@ final class DocumentsWriterPerThread implements Accountable {
    */
   FrozenBufferedUpdates prepareFlush() {
     assert numDocsInRAM > 0;
+    // 这里会对齐globalSlice deleteSlice deleteQueue 中的tail，并且应用globalSlice 中的删除，最后生成冻结的globalUpdates
     final FrozenBufferedUpdates globalUpdates = deleteQueue.freezeGlobalBuffer(deleteSlice);
     /* deleteSlice can possibly be null if we have hit non-aborting exceptions during indexing and never succeeded
     adding a document. */
     if (deleteSlice != null) {
       // apply all deletes before we flush and release the delete slice
+      // deleteSlice应用到pendingUpdates
       deleteSlice.apply(pendingUpdates, numDocsInRAM);
       assert deleteSlice.isEmpty();
       deleteSlice.reset();
@@ -357,6 +365,7 @@ final class DocumentsWriterPerThread implements Accountable {
     // Apply delete-by-docID now (delete-byDocID only
     // happens when an exception is hit processing that
     // doc, eg if analyzer has some problem w/ the text):
+    // 先处理delete-by-docID，这种只会在异常发生时才会生成
     if (numDeletedDocIds > 0) {
       flushState.liveDocs = new FixedBitSet(numDocsInRAM);
       flushState.liveDocs.set(0, numDocsInRAM);

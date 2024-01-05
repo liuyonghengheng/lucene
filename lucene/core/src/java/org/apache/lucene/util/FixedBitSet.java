@@ -500,7 +500,7 @@ public final class FixedBitSet extends BitSet {
 
   /**
    * Sets a range of bits
-   *
+   * 将某个范围的bit都设置成1。
    * @param startIndex lower index
    * @param endIndex one-past the last bit to set
    */
@@ -511,21 +511,22 @@ public final class FixedBitSet extends BitSet {
     if (endIndex <= startIndex) {
       return;
     }
+    // 计算在数组中的位置，如果按最大的正整数，最多一共需要(2^16)/(2^6)= 2^10 word (long)，
+    // 如果知道最大值，则可以减小数组空间，max/(2^6)
+    int startWord = startIndex >> 6; // 计算起始位置
+    int endWord = (endIndex - 1) >> 6; // 计算结束位置
 
-    int startWord = startIndex >> 6;
-    int endWord = (endIndex - 1) >> 6;
+    long startmask = -1L << startIndex; //将低位的startIndex个位都设置成0，高位都设置成1, 补码 11111111 << 1 = 11111110, 从右到左，第一个1代表开始
+    long endmask = -1L >>> -endIndex; //将低位的endIndex个位都设置成1,高位都设置成0, 补码 11111111 >>> -3 = 7  = 2^3-1 = 00000111，从右到左，最后一个1代表结束
 
-    long startmask = -1L << startIndex;
-    long endmask = -1L >>> -endIndex;
-
-    if (startWord == endWord) {
+    if (startWord == endWord) {// 如果在同一个 word中，直接相与操作即可
       bits[startWord] |= (startmask & endmask);
       return;
     }
 
-    bits[startWord] |= startmask;
-    Arrays.fill(bits, startWord + 1, endWord, -1L);
-    bits[endWord] |= endmask;
+    bits[startWord] |= startmask; //先设置开始的word
+    Arrays.fill(bits, startWord + 1, endWord, -1L);//中间的word都设置成1
+    bits[endWord] |= endmask;//设置结束的 word
   }
 
   @Override

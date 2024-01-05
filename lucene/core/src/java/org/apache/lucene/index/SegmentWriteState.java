@@ -55,7 +55,7 @@ public class SegmentWriteState {
 
   /**
    * {@link FixedBitSet} recording live documents; this is only set if there is one or more deleted
-   * documents.
+   * documents.记录存活的docs，只有在有删除的doc时才会被初始化。
    */
   public FixedBitSet liveDocs;
 

@@ -162,7 +162,7 @@ public abstract class PrimaryNode extends Node {
     synchronized (finishedMergedFiles) {
       completedMergeFiles = Set.copyOf(finishedMergedFiles);
     }
-    mgr.maybeRefreshBlocking();
+    mgr.maybeRefreshBlocking();// flush
     boolean result = setCurrentInfos(completedMergeFiles);
     if (result) {
       message("top: opened NRT reader version=" + curInfos.getVersion());
@@ -288,7 +288,7 @@ public abstract class PrimaryNode extends Node {
     }
 
     SegmentInfos oldInfos = curInfos;
-    writer.incRefDeleter(infos);
+    writer.incRefDeleter(infos); // 标记这些文件都是在用的，不能删除！
     curInfos = infos;
     if (oldInfos != null) {
       writer.decRefDeleter(oldInfos);

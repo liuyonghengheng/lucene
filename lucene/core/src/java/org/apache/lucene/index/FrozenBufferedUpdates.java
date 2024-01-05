@@ -175,7 +175,7 @@ final class FrozenBufferedUpdates {
 
     totalDelCount += applyTermDeletes(segStates);
     totalDelCount += applyQueryDeletes(segStates);
-    totalDelCount += applyDocValuesUpdates(segStates);
+    totalDelCount += applyDocValuesUpdates(segStates);//更新
 
     return totalDelCount;
   }
@@ -445,14 +445,14 @@ final class FrozenBufferedUpdates {
     if (deleteTerms.size() == 0) {
       return 0;
     }
-
+    //
     // We apply segment-private deletes on flush:
     assert privateSegment == null;
 
     long startNS = System.nanoTime();
 
     long delCount = 0;
-
+    // 遍历所有的段
     for (BufferedUpdatesStream.SegmentState segState : segStates) {
       assert segState.delGen != delGen
           : "segState.delGen=" + segState.delGen + " vs this.gen=" + delGen;
@@ -464,13 +464,13 @@ final class FrozenBufferedUpdates {
         // This means we are the only remaining reference to this segment, meaning
         // it was merged away while we were running, so we can safely skip running
         // because we will run on the newly merged segment next:
-        continue;
+        continue; //
       }
 
       FieldTermIterator iter = deleteTerms.iterator();
       BytesRef delTerm;
       TermDocsIterator termDocsIterator = new TermDocsIterator(segState.reader, true);
-      while ((delTerm = iter.next()) != null) {
+      while ((delTerm = iter.next()) != null) { // 获取delTerm 匹配的 所有的docid 列表
         final DocIdSetIterator iterator = termDocsIterator.nextTerm(iter.field(), delTerm);
         if (iterator != null) {
           int docID;
@@ -479,8 +479,8 @@ final class FrozenBufferedUpdates {
             // when deleting by Term (unlike by Query)
             // because on flush we apply all Term deletes to
             // each segment.  So all Term deleting here is
-            // against prior segments:
-            if (segState.rld.delete(docID)) {
+            // against prior segments: 当根据Term删除时，不会做docID的限制检查，因为我们会将删除应用到所有的segments。所以这里所有的删除都是针对历史segments
+            if (segState.rld.delete(docID)) { //rld是  ReadersAndUpdates，其中有个pendingDeletes用来记录存活的docID
               delCount++;
             }
           }

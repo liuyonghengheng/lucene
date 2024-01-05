@@ -67,13 +67,13 @@ final class FreqProxTermsWriter extends TermsHash {
           assert delDocLimit < PostingsEnum.NO_MORE_DOCS;
           int doc;
           while ((doc = postings.nextDoc()) < delDocLimit) {
-            if (state.liveDocs == null) {
+            if (state.liveDocs == null) {//初始化
               state.liveDocs = new FixedBitSet(state.segmentInfo.maxDoc());
-              state.liveDocs.set(0, state.segmentInfo.maxDoc());
+              state.liveDocs.set(0, state.segmentInfo.maxDoc());//0-maxDoc 的bit全设置成1
             }
             if (state.liveDocs.get(doc)) {
               state.delCountOnFlush++;
-              state.liveDocs.clear(doc);
+              state.liveDocs.clear(doc);//将对应的bit设置成0
             }
           }
         }

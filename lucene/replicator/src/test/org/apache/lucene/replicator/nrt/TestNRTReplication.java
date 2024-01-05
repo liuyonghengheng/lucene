@@ -303,7 +303,7 @@ public class TestNRTReplication extends LuceneTestCase {
     primary.close();
   }
 
-  @Nightly
+//  @Nightly
   public void testReplicateForceMerge() throws Exception {
 
     Path primaryPath = createTempDir("primary");

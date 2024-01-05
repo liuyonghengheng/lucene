@@ -74,9 +74,9 @@ public class TestDocumentsWriterDeleteQueue extends LuceneTestCase {
       uniqueValues.add(term[0]);
       queue.addDelete(term);
       if (random().nextInt(20) == 0 || j == ids.length - 1) {
-        queue.updateSlice(slice1);
-        assertTrue(slice1.isTailItem(term));
-        slice1.apply(bd1, j);
+        queue.updateSlice(slice1);// 更新slice1的tail到和queue的tail相同
+        assertTrue(slice1.isTailItem(term));//
+        slice1.apply(bd1, j);// 将slice1中的item依次应用到bd1
         assertAllBetween(last1, j, bd1, ids);
         last1 = j + 1;
       }

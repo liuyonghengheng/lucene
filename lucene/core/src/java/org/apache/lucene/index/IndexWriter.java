@@ -1759,7 +1759,7 @@ public class IndexWriter
   /**
    * Deletes the document(s) containing any of the terms. All given deletes are applied and flushed
    * atomically at the same time.
-   *
+   *  将包含任意一个Term的doc删除，所有的删除操作都是同时被原子性的apply和刷新
    * @return The <a href="#sequence_number">sequence number</a> for this operation
    * @param terms array of terms to identify the documents to be deleted
    * @throws CorruptIndexException if the index is corrupt
@@ -1778,7 +1778,7 @@ public class IndexWriter
   /**
    * Deletes the document(s) matching any of the provided queries. All given deletes are applied and
    * flushed atomically at the same time.
-   *
+   * 将query命中的doc删除，所有的删除操作都是同时被原子性的apply和刷新
    * @return The <a href="#sequence_number">sequence number</a> for this operation
    * @param queries array of queries to identify the documents to be deleted
    * @throws CorruptIndexException if the index is corrupt
@@ -1854,7 +1854,8 @@ public class IndexWriter
    * Updates a document's {@link NumericDocValues} for <code>field</code> to the given <code>value
    * </code>. You can only update fields that already exist in the index, not add new fields through
    * this method. You can only update fields that were indexed with doc values only.
-   *
+   * 更新一个doc的指定field的给定的值。只能更新在index中已经存在的fields，这个方法不能添加新的filed。
+   * 只能更新已经索引的doc的已经存在的field的值。
    * @param term the term to identify the document(s) to be updated
    * @param field field name of the {@link NumericDocValues} field
    * @param value new value for the field
@@ -1916,7 +1917,8 @@ public class IndexWriter
    * set of documents that are associated with the {@link Term} to the same value. All updates are
    * atomically applied and flushed together. If a doc values fields data is <code>null</code> the
    * existing value is removed from all documents matching the term.
-   *
+   * 把doc的多个字段filed，分别更新为field对应的值。这些更新是原子的被应用，并且也一起被刷新。
+   * 如果给定的field的数据值是null，就代表删除已经存在的data值。
    * @param updates the updates to apply
    * @return The <a href="#sequence_number">sequence number</a> for this operation
    * @throws CorruptIndexException if the index is corrupt
@@ -5569,11 +5571,13 @@ public class IndexWriter
    * the newly merged segment, before the merge commits. This is not required for near real-time
    * search, but will reduce search latency on opening a new near real-time reader after a merge
    * completes.
-   *
+   * 如果 DirectoryReader#open(IndexWriter) 被调用，也就是说这个writer在近实时模式，这个时候当一个merge操作完成之后，
+   * 但是在merge 操作commit之前，将会调用IndexReaderWarmer 来将reader预热到最新merged segment。
+   * 这个对于近实时搜索不是必须的，但是在merge操作完成之后，他会降低打开一个新的近实时reader的延迟。
    * @lucene.experimental
    *     <p><b>NOTE</b>: {@link #warm(LeafReader)} is called before any deletes have been carried
    *     over to the merged segment.
-   */
+   *///注意 warm(LeafReader)只能在将任何删除操作合并到merged segmnet 之前被调用。
   @FunctionalInterface
   public interface IndexReaderWarmer {
     /**
@@ -6044,11 +6048,11 @@ public class IndexWriter
     return false;
   }
 
-  /**
+  /** 将一个已经冻结的packet（FrozenBufferedUpdates，里面存储了删除（term/query类的）或者文档更新）转换成index中真实准确的docIDs，并且应用这些删除和修改操作。
    * Translates a frozen packet of delete term/query, or doc values updates, into their actual
    * docIDs in the index, and applies the change. This is a heavy operation and is done concurrently
    * by incoming indexing threads.
-   */
+   *///这是一个比较重量级的操作，而且是通过传入的索引线程并法执行的。
   final void forceApply(FrozenBufferedUpdates updates) throws IOException {
     updates.lock();
     try {
@@ -6067,13 +6071,13 @@ public class IndexWriter
       long totalDelCount = 0;
 
       boolean finished = false;
-
+      // 优化 并发性能：假设我们针对index现在所有的segments,随意的去处理删除，即使那些并发merges 也在运行。一旦我们完成，我们就检查是否有一个merge在我们运行过程中完成了，如果是，我们必须重试处理新的merged segment
       // Optimistic concurrency: assume we are free to resolve the deletes against all current
       // segments in the index, despite that
       // concurrent merges are running.  Once we are done, we check to see if a merge completed
       // while we were running.  If so, we must retry
       // resolving against the newly merged segment(s).  Eventually no merge finishes while we were
-      // running and we are done.
+      // running and we are done. 最后直到在我们运行过程中没有merge完成，我们才算真的完成。
       while (true) {
         String messagePrefix;
         if (iter == 0) {
@@ -6179,7 +6183,7 @@ public class IndexWriter
             // Must do this while still holding IW lock else a merge could finish and skip carrying
             // over our updates:
 
-            // Record that this packet is finished:
+            // Record that this packet is finished: 标记为finished
             bufferedUpdatesStream.finished(updates);
 
             finished = true;
