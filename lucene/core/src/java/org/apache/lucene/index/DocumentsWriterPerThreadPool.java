@@ -44,6 +44,7 @@ final class DocumentsWriterPerThreadPool implements Iterable<DocumentsWriterPerT
 
   private final Set<DocumentsWriterPerThread> dwpts =
       Collections.newSetFromMap(new IdentityHashMap<>());
+  // 近似的优先队列，获取DWPT时，会优先返回最近使用过的DWPT
   private final ConcurrentApproximatePriorityQueue<DocumentsWriterPerThread> freeList =
       new ConcurrentApproximatePriorityQueue<>();
   private final Supplier<DocumentsWriterPerThread> dwptFactory;
@@ -111,6 +112,7 @@ final class DocumentsWriterPerThreadPool implements Iterable<DocumentsWriterPerT
   /**
    * This method is used by DocumentsWriter/FlushControl to obtain a DWPT to do an indexing
    * operation (add/updateDocument).
+   * 这个方法被DocumentsWriter/FlushControl用来获取DWPT
    */
   DocumentsWriterPerThread getAndLock() {
     ensureOpen();
@@ -182,8 +184,8 @@ final class DocumentsWriterPerThreadPool implements Iterable<DocumentsWriterPerT
     // #getAndLock cannot pull this DWPT out of the pool since #getAndLock does a DWPT#tryLock to
     // check if the DWPT is available.
     assert perThread.isHeldByCurrentThread();
-    if (dwpts.remove(perThread)) {
-      freeList.remove(perThread);
+    if (dwpts.remove(perThread)) {//从dwpts set中删除
+      freeList.remove(perThread);//从优先队列中删除
     } else {
       assert freeList.contains(perThread) == false;
       return false;

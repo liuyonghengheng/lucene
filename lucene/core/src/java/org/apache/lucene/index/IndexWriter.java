@@ -165,6 +165,41 @@ import org.apache.lucene.util.Version;
  * IndexWriter, IndexWriter will try to catch this (eg, if it's in a wait() or Thread.sleep()), and
  * will then throw the unchecked exception {@link ThreadInterruptedException} and <b>clear</b> the
  * interrupt status on the thread.
+ * indexwriter 用来创建和保持一个index。
+ *
+ * **关于打开一个index**
+ *
+ * IndexWriterConfig.setOpenMode(OpenMode) 配置打开模式，决定了创建一个新的index 还是打开一个已经存在的index。注意即便readers正在读取和使用这个index，你同样可以使用 OpenMode.CREATE 模式打开一个index. 此时老的readers会继续读取他们打开index的那个时间点的snapshot，并不会读取到最新创建的index，除非他们重新打开index。设置为 OpenMode.CREATE\_OR\_APPEND 模式时，如果不存在对应的index 则会创建新的，如果存在则直接打开。
+ *
+ * **关于文档操作**
+ *
+ * doc 可以被添加（addDocument(Iterable)） 删除（deleteDocuments(Term/Query...)） 更新（updateDocument(Term, Iterable) 这个方法实际上是先删除Term匹配的文档，然后再添加给定的参数doc）。操作完成之后一定要调用 close 方法关闭indexwriter。每次操作会返回一个sequence\_number，代表操作生效的顺序。
+ *
+ * 每个造成index改变的操作方法都会返回一个 seqno（sequence\_number），这个序号的大小代表了操作生效的先后顺序。这个seqno实际上由这个链路返回DocumentsWriter.updateDocuments -> DWPT.updateDocuments -> DWPT.finishDocuments ->  DocumentsWriterDeleteQueue.add/updateSlice 返回，由DocumentsWriterDeleteQueue生成。 commit() 方法同样会返回一个seqno，描述哪些操作在这个提交点中，以及哪些不在这个提交点中。seqno 都是临时结果，不会被持久化存储到index中，并且有效范围只在一个IndexWriter实例中。
+ *
+ * **关于flush和segments生成**
+ *
+ * 所有的操作变化都缓存在内存中，并且会周期性的刷新到对应的文件路径下。一个flush操作被触发的条件是 从上次flush开始已经有足够多的doc添加进来。可以根据doc的RAM使用量（通过IndexWriterConfig.setRAMBufferSizeMB设置），或者doc的条数（通过IndexWriterConfig.setMaxBufferedDocs 设置）。默认情况下的flush出发条件是RAM使用量达到 IndexWriterConfig.DEFAULT\_RAM\_BUFFER\_SIZE\_MB这个值。为了追求最好的indexing性能，在根据RAM使用量flush时，需要一个比较大的RAM buffer 参数，这样不至于频繁的flush。注意，setRAMBufferSizeMB 和 setMaxBufferedDocs这俩配置生效时，删除的terms是不会计算进去的，所以删除的terms可能已经超过阈值，但是不会触发flush。并且需要注意，flushing只是把indexwriter中内部内存中的缓存的数据移动到index中，但是这些改变对于IndexReader是不可见的，直到 commit() or close() 方法被调用！一个flush可能也会触发一个或者多个merge，不过merge操作都是在后台线程中执行，所以merge操作不会阻塞 indexwriter 的写入doc的相关操作。
+ *
+ * 打开一个indexwriter的同时会在index路径下创建一个 lock 文件，此时当在同一个index路径下尝试打开另一个indexwriter就会导致获取锁异常LockObtainFailedException。也就是说一个index同时只能被一个indexwriter打开。
+ *
+ * **关于删除策略**
+ *
+ * indexwriter 具体使用哪个 IndexDeletionPolicy 实现，是可选的。这样你就可以控制什么时候把历史的commit从index中删除掉。默认的策略是 KeepOnlyLastCommitDeletionPolicy，当一个新的commit生成时，他会删除掉所有的历史commits。创建自己的策略可以使以前的“某一时间点”的commit在索引中显式的保持活动一段时间，这可能对你的应用程序很有用，也可以是为了给readers足够的时间刷新到新commit点，而不会直接将旧commit从其下删除。后者是必要的，当多台计算机轮流针对通过NFS等远程文件系统挂载的单个共享索引打开自己的IndexWriter和IndexReaders时，因为NFS不支持“最后关闭时才删除”语义（多个程序打开一个文件，如果有程序此时删除此文件，实际会等待所有的程序都关闭文件之后才会真正的删除）。通过NFS访问索引的单个计算机可以使用默认删除策略，因为NFS客户端在本地模拟“最后关闭时删除”。也就是说，与本地IO设备相比，通过NFS访问索引可能会导致性能较差。
+ *
+ * **关于merge 策略**
+ *
+ * IndexWriter 允许你分开修改  MergePolicy 和 MergeScheduler。MergePolicy被调用的时机是当任何时候segments发生改变时。他充当的角色就是选择哪些segements进行merge，如果有选中segmnets，则 返回一个MergePolicy.MergeSpecification 来描述merge。默认是LogByteSizeMergePolicy。而MergeScheduler一般被调用时会传递给他需要执行的merge，并且他主要决定什么时候和怎么运行这些merge任务。默认是ConcurrentMergeScheduler.
+ *
+ * **关于OOME**
+ *
+ * 注意，如果遇到了VirtualMachineError错误，或者在checkpoint过程中发生灾难，这时IndexWriter会自动关闭。这是一种防御措施，以防任何内部状态（缓冲的文档、删除、引用计数）被破坏。任何后续调用都将引发AlreadyClosedException。
+ *
+ * **关于线程安全**
+ *
+ * **注意**，IndexWriter 实例是线程安全的，也就是说多个线程可以并发的访问他的任何方法。如果你的应用需要外部的同步操作，你不能在创建的 IndexWriter 实例上加同步，因为这可能会导致死锁，要加同步就要在你自己定义的其他对象上加，不能在lucene相关的对象上加。
+ *
+ * **注意**，如果你在IndexWriter内部线程中调用 Thread.interrupt()，IndexWriter会尝试捕获他（eg, if it's in a wait() or Thread.sleep()），同时会抛出没有检查的异常 ThreadInterruptedException ，同时会清除掉线程中的 interrupt 状态。
  */
 
 /*
@@ -193,17 +228,22 @@ public class IndexWriter
   /**
    * Hard limit on maximum number of documents that may be added to the index. If you try to add
    * more than this you'll hit {@code IllegalArgumentException}.
+   * 超用会触发IllegalArgumentException异常
    */
   // We defensively subtract 128 to be well below the lowest
   // ArrayUtil.MAX_ARRAY_LENGTH on "typical" JVMs.  We don't just use
   // ArrayUtil.MAX_ARRAY_LENGTH here because this can vary across JVMs:
+  // 为了兼容不同的JVM，需要减128,不直接使用MAX_ARRAY_LENGTH是因为不同的jvm这个值不同。
   public static final int MAX_DOCS = Integer.MAX_VALUE - 128;
 
-  /** Maximum value of the token position in an indexed field. */
+  /** Maximum value of the token position in an indexed field.
+   * 一个token在一个字段值中的位置，最大为int整数-128,也就是一个text值最多能切分出来MAX_POSITION个token
+   * */
   public static final int MAX_POSITION = Integer.MAX_VALUE - 128;
 
   // Use package-private instance var to enforce the limit so testing
   // can use less electricity:
+  // 如果知道上限，在某些数据结构可以少申请一些空间
   private static int actualMaxDocs = MAX_DOCS;
 
   /** Used only for testing. */
@@ -225,7 +265,7 @@ public class IndexWriter
 
   private static final int UNBOUNDED_MAX_MERGE_SEGMENTS = -1;
 
-  /** Name of the write lock in the index. */
+  /** Name of the write lock in the index. 写锁文件的文件名*/
   public static final String WRITE_LOCK_NAME = "write.lock";
 
   /** Key for the source of a segment in the {@link SegmentInfo#getDiagnostics() diagnostics}. */
@@ -242,28 +282,33 @@ public class IndexWriter
    * the analyzer longer than this length, an <code>IllegalArgumentException</code> is thrown and a
    * message is printed to infoStream, if set (see {@link
    * IndexWriterConfig#setInfoStream(InfoStream)}).
+   * term绝对的最大长度，如果从analyzer返回的term比这个长度长，就会抛出IllegalArgumentException异常，并返回
+   * 信息并打印到infoStream
    */
   public static final int MAX_TERM_LENGTH = BYTE_BLOCK_SIZE - 2;
 
-  /** Maximum length string for a stored field. */
+  /** Maximum length string for a stored field. 字段值的最大长度*/
   public static final int MAX_STORED_STRING_LENGTH =
       ArrayUtil.MAX_ARRAY_LENGTH / UnicodeUtil.MAX_UTF8_BYTES_PER_CHAR;
 
   // when unrecoverable disaster strikes, we populate this with the reason that we had to close
-  // IndexWriter
+  // IndexWriter 当不可恢复的灾难发生时，我们在其中填充关于必须关闭IndexWriter的原因
   private final AtomicReference<Throwable> tragedy = new AtomicReference<>(null);
 
-  private final Directory directoryOrig; // original user directory
-  private final Directory directory; // wrapped with additional checks
+  private final Directory directoryOrig; // original user directory，原始的路径
+  private final Directory directory; // wrapped with additional checks，添加了额外的检查
 
-  // increments every time a change is completed
+  // increments every time a change is completed，每次修改完成就+1
   private final AtomicLong changeCount = new AtomicLong();
+  // 上次提交，涉及到的修改的数量
   private volatile long lastCommitChangeCount; // last changeCount that was committed
 
   // list of segmentInfo we will fallback to if the commit fails
+  // 如果提交失败，我们需要回退的segmentInfo的列表
   private List<SegmentCommitInfo> rollbackSegments;
 
   // set when a commit is pending (after prepareCommit() & before commit())
+  // 将要commit时设置 （已经执行过prepareCommit()，但是还没执行commit() 的中间状态）
   private volatile SegmentInfos pendingCommit;
   private volatile long pendingSeqNo;
   private volatile long pendingCommitChangeCount;
@@ -280,11 +325,14 @@ public class IndexWriter
 
   private final ReentrantLock writeDocValuesLock = new ReentrantLock();
 
+  // 事件队列
   static final class EventQueue implements Closeable {
     private volatile boolean closed;
     // we use a semaphore here instead of simply synced methods to allow
     // events to be processed concurrently by multiple threads such that all events
     // for a certain thread are processed once the thread returns from IW
+    // 这里使用信号量，而不是使用简单的同步方法，是为了让事件可以被多线程并发的处理
+    // 一旦线程被从IW返回，那么这个线程的所有的事件都会被处理。
     private final Semaphore permits = new Semaphore(Integer.MAX_VALUE);
     private final Queue<Event> queue = new ConcurrentLinkedQueue<>();
     private final IndexWriter writer;
@@ -326,7 +374,7 @@ public class IndexWriter
           : "must acquire a permit before processing events";
       Event event;
       while ((event = queue.poll()) != null) {
-        event.process(writer);
+        event.process(writer);//事件处理
       }
     }
 
@@ -412,7 +460,7 @@ public class IndexWriter
    */
   private final AtomicLong pendingNumDocs = new AtomicLong();
 
-  private final boolean softDeletesEnabled;
+  private final boolean softDeletesEnabled;//软删除
 
   private final DocumentsWriter.FlushNotifications flushNotifications =
       new DocumentsWriter.FlushNotifications() {
@@ -428,7 +476,7 @@ public class IndexWriter
 
         @Override
         public void afterSegmentsFlushed() throws IOException {
-          publishFlushedSegments(false);
+          publishFlushedSegments(false);// 这里是重点
         }
 
         @Override
@@ -458,26 +506,24 @@ public class IndexWriter
    * Expert: returns a readonly reader, covering all committed as well as un-committed changes to
    * the index. This provides "near real-time" searching, in that changes made during an IndexWriter
    * session can be quickly made available for searching without closing the writer nor calling
-   * {@link #commit}.Expert：返回一个只读读取器，覆盖索引中所有已提交和未提交的更改。这提供了“近实时”的搜索，
-   * 因为在IndexWriter会话期间所做的更改可以快速用于搜索，而无需关闭writer或调用｛@link#commit｝
+   * {@link #commit}.Expert：
    * <p>Note that this is functionally equivalent to calling {#flush} and then opening a new reader.
    * But the turnaround time of this method should be faster since it avoids the potentially costly
-   * {@link #commit}.注意：这在功能上等同于调用flush然后打开一个新的reader，
-   * 但这种方法的周转时间应该更快，因为它避免了潜在的昂贵{@link#commit}
+   * {@link #commit}.
    * <p>You must close the {@link IndexReader} returned by this method once you are done using it.
-   * 使用完此方法返回的｛@link IndexReader｝后，必须关闭它。
+   *
    * <p>It's <i>near</i> real-time because there is no hard guarantee on how quickly you can get a
    * new reader after making changes with IndexWriter. You'll have to experiment in your situation
    * to determine if it's fast enough. As this is a new and experimental feature, please report back
    * on your findings so we can learn, improve and iterate.
-   * 之所以称之为近实时，是因为IndexWriter 发生修改之后，无法硬性的保证你可以有多快获取到新的reader，。。。。。，这是一个经验性的特征
+   *
    * <p>The resulting reader supports {@link DirectoryReader#openIfChanged}, but that call will
    * simply forward back to this method (though this may change in the future).
    *
    * <p>The very first time this method is called, this writer instance will make every effort to
    * pool the readers that it opens for doing merges, applying deletes, etc. This means additional
-   * resources (RAM, file descriptors, CPU time) will be consumed.当这个方法被调用的第一时间？还是第一次被调用？，
-   * writer实例会尽一切努力将打开的readers集中起来，去做merge或者delete ，这意味着额外的内存cpu文件描述符会被消耗。
+   * resources (RAM, file descriptors, CPU time) will be consumed.
+   *
    * <p>For lower latency on reopening a reader, you should call {@link
    * IndexWriterConfig#setMergedSegmentWarmer} to pre-warm a newly merged segment before it's
    * committed to the index. This is important for minimizing index-to-search delay after a large
@@ -488,8 +534,28 @@ public class IndexWriter
    *
    * <p><b>NOTE</b>: Once the writer is closed, any outstanding readers may continue to be used.
    * However, if you attempt to reopen any of those readers, you'll hit an {@link
-   * AlreadyClosedException}.一旦writer被关闭，任何已经产生的readers可以继续被使用，
-   * 但是，如果你试图重新打开任何一个readers，你都将触发异常。
+   * AlreadyClosedException}.
+   *
+   * 返回一个只读读取器，覆盖索引中所有已提交和未提交的更改。这提供了“近实时”的搜索， 因为在IndexWriter会话期间所做的更改可以快速用于搜索，而无需关闭writer也不需要调用commit.
+   *
+   * 使用经验：
+   *
+   * 需要注意的是这在功能上等同于调用flush然后打开一个新的reader， 但这种方法的周转时间应该更快，因为它避免了潜在的昂贵commit(如果是读取dir生成的reader，要想读取到最新刷新的segment，则必须等待writer commit 刷盘成功，才能读到)
+   *
+   * 使用完此方法返回的 IndexReader 后，必须关闭它。
+   *
+   * 之所以称之为近实时，是因为IndexWriter 发生修改之后，无法硬性的保证你可以有多快获取到新的reader。这是一个新的实验性质的特征。你需要根据你自己的情况来确定他是不是足够快。
+   *
+   * 返回的reader支持 DirectoryReader.openIfChanged(),但是这个调用会简单的定向到这个函数中（虽然以后可能会变）
+   *
+   * 当这个方法被调用的第一时间， writer实例会尽一切努力将其打开的readers集中起来，然后去做merge或者应用deletes ，这意味着额外的内存cpu文件描述符等资源会被消耗。
+   *
+   * 为了让reopening a reader的延迟更低，你应该调用IndexWriterConfig.setMergedSegmentWarmer 来 pre-warm 预热一个最新merged segment，并且是在他被提交到index之前！这对于一个大的merge之后（commit之前），为了最小化index-to-search的延迟，这么做是非常重要的。
+   *
+   * 如果另外的线程在运行addIndexes\*前缀相关的方法调用，那么这个reader就只能从外部的index中检索这些segments（那些已经被成功复制过来的index）
+   *
+   * 注意：一旦writer被关闭，任何已经产生的readers可以继续被使用， 但是，如果你试图重新打开任何一个readers，你都将触发AlreadyClosedException异常。
+   *
    * @lucene.experimental
    * @return IndexReader that covers entire index plus all changes made so far by this IndexWriter
    *     instance
@@ -507,6 +573,7 @@ public class IndexWriter
     if (infoStream.isEnabled("IW")) {
       infoStream.message("IW", "flush at getReader");
     }
+    // 每次都要先进行flush，flush之前，需要先将reader先聚集起来，首先要调用下面的方法：
     // Do this up front before flushing so that the readers
     // obtained during this flush are pooled, the first time
     // this method is called:
@@ -521,6 +588,9 @@ public class IndexWriter
      * done with creating the NRT DirectoryReader.
      * We release the two stage full flush after we are done opening the
      * directory reader!
+     * 为了发布一个NRT的reader，我们必须保证DW不会添加任何的segments或者deletes，直到我们
+     * 完成创建NRT DirectoryReader。
+     * 当我们完成打开directory reader，我们会发布两个阶段的full flush。
      */
     MergePolicy.MergeSpecification onGetReaderMerges = null;
     final AtomicBoolean stopCollectingMergedReaders = new AtomicBoolean(false);
@@ -528,6 +598,8 @@ public class IndexWriter
     final Map<String, SegmentReader> openedReadOnlyClones = new HashMap<>();
     // this function is used to control which SR are opened in order to keep track of them
     // and to reuse them in the case we wait for merges in this getReader call.
+    // 这个方法是用来控制哪些SR会被打开，以便我们能够追踪他们，
+    // 并且在getReader函数中等待merges情况下我们可以复用他们
     IOFunction<SegmentCommitInfo, SegmentReader> readerFactory =
         sci -> {
           final ReadersAndUpdates rld = getPooledInstance(sci, true);
@@ -548,11 +620,11 @@ public class IndexWriter
     boolean success2 = false;
     try {
       /* This is the essential part of the getReader method. We need to take care of the following things:
-       *  - flush all currently in-memory DWPTs to disk 刷新所有内存中的DWPTs到磁盘中
-       *  - apply all deletes & updates to new and to the existing DWPTs 把删除和更新应用到新的和已经存在的DWPTs
+       *  - flush all currently in-memory DWPTs to disk
+       *  - apply all deletes & updates to new and to the existing DWPTs
        *  - prevent flushes and applying deletes of concurrently indexing DWPTs to be applied
        *  - open a SDR on the updated SIS
-       * 这是getReader方法的重要部分，我们需要注意以上几个事情：
+       *
        * in order to prevent concurrent flushes we call DocumentsWriter#flushAllThreads that swaps out the deleteQueue
        *  (this enforces a happens before relationship between this and the subsequent full flush) and informs the
        * FlushControl (#markForFullFlush()) that it should prevent any new DWPTs from flushing until we are \
@@ -562,15 +634,29 @@ public class IndexWriter
        * aspect is that it all happens between DocumentsWriter#flushAllThread() and DocumentsWriter#finishFullFlush(boolean)
        * since once the flush is marked as done deletes start to be applied to the segments on disk without guarantees that
        * the corresponding added documents (in the update case) are flushed and visible when opening a SDR.
+       * 这是getReader方法的重要部分。我们需要注意以下几点：
+       * - 刷新所有内存中的DWPTs到磁盘中，执行flushAllThreads
+       * - 把所有的删除和更新应用到新的和已经存在的DWPTs，执行flushAllThreads
+       * - 防止并发索引中的DWPT的刷新和正在应用的删除被应用，不能有并发的flush
+       * - 在被更新过的SIS(segmentInfos)上，打开一个SDR(StandardDirectoryReader)，最后根据最新的SIS打开SDR
+       *
+       * 为了防止并发的flushs，我们调用DocumentsWriter.flushAllThreads，这个函数会换出deleteQueue(在这个和
+       * 接下来的 full flush之间，是有一个强制的先后关系的) 以及通知FlushControl他需要阻止任何新的DWPTs做flush操作，直到我们完成（
+       * DocumentsWriter.finishFullFlush(boolean)）.所有的这些都被fullFlushLock保护着，从而阻止同时发生多个full flushes（阻塞flush）。
+       * 一旦DocWriter已经完成初始化了一个full flush，我们就可以继续flush 并应用deletes & updates 到已经写完成的segments，而不需要担心
+       * 并发索引的indexing DWPTs（不会阻塞写入）。重要的方面是他们都发生在 DocumentsWriter#flushAllThread() 和
+       *  DocumentsWriter#finishFullFlush(boolean) 之间，因此一旦flush被标记成完成，deletes就会被应用到已经刷盘的segments，
+       * 而不保证在这之间添加的文档（在更新的情况下产生的），在打开SDR时，被刷新和变得可见。
        */
       boolean success = false;
-      synchronized (fullFlushLock) {
+      synchronized (fullFlushLock) { // 防止多个full flush 并发执行，调用 flushAllThreads 代码块都需要同步处理
         try {
           // TODO: should we somehow make the seqNo available in the returned NRT reader?
-          anyChanges = docWriter.flushAllThreads() < 0;
+          anyChanges = docWriter.flushAllThreads() < 0; // flush 所有的 DWPTs
           if (anyChanges == false) {
             // prevent double increment since docWriter#doFlush increments the flushcount
             // if we flushed anything.
+            // 防止重复递增，因为如果有任何修改被刷新，docWriter#doFlush都会递增flushcount
             flushCount.incrementAndGet();
           }
           publishFlushedSegments(true);
@@ -660,6 +746,7 @@ public class IndexWriter
         } finally {
           // Done: finish the full flush!
           assert Thread.holdsLock(fullFlushLock);
+          // 完成flush，每次调用完flushAllThreads 都需要调用一次finishFullFlush，以便释放锁
           docWriter.finishFullFlush(success);
           if (success) {
             processEvents(false);
@@ -1507,7 +1594,9 @@ public class IndexWriter
    * Atomically deletes documents matching the provided delTerm and adds a block of documents with
    * sequentially assigned document IDs, such that an external reader will see all or none of the
    * documents.
-   *
+   * 先删除delTerm命中的doc，然后再添加一组docs，这个操作会分配一个docid 也就是seqid
+   * （只在indexwriter 范围内存在，确切的说是在deletequeue中生成）。因此外部的reader，要么看到全部，
+   * 要么看不到这组更新，也就是说最与外部的reader是原子的。
    * <p>See {@link #addDocuments(Iterable)}.
    *
    * @return The <a href="#sequence_number">sequence number</a> for this operation
@@ -4144,6 +4233,7 @@ public class IndexWriter
   /**
    * Moves all in-memory segments to the {@link Directory}, but does not commit (fsync) them (call
    * {@link #commit} for that).
+   * 把所有的内存中的segments移动到Directory，但是不commit他们，也就是说不会fsync真正落盘。
    */
   public final void flush() throws IOException {
     flush(true, true);
@@ -4151,7 +4241,7 @@ public class IndexWriter
 
   /**
    * Flush all in-memory buffered updates (adds and deletes) to the Directory.
-   *
+   * 把内存中所有缓存的updates(包括adds 和 deletes) 刷新到文件。
    * @param triggerMerge if true, we may merge segments (if deletes or docs were flushed) if
    *     necessary
    * @param applyAllDeletes whether pending deletes should also
@@ -4164,17 +4254,23 @@ public class IndexWriter
     // to hold the lock for that.  In the case of
     // ConcurrentMergeScheduler this can lead to deadlock
     // when it stalls due to too many running merges.
+    // 注意：这个方法不能是同步的，因为后面的maybeMerge()会调用mergeScheduler.merge，运行这个函数会
+    // 比较耗时，我们肯定不想把锁加上面。在这种情况下ConcurrentMergeScheduler可能会导致死锁，当他因为
+    // 有太多的运行中的merges而被拖慢时。
 
     // We can be called during close, when closing==true, so we must pass false to ensureOpen:
+    // 必须保证是open的，因为即便是close状态，我们同样可以调用这个函数，这会导致问题
     ensureOpen(false);
     if (doFlush(applyAllDeletes) && triggerMerge) {
       maybeMerge(config.getMergePolicy(), MergeTrigger.FULL_FLUSH, UNBOUNDED_MAX_MERGE_SEGMENTS);
     }
   }
 
-  /** Returns true a segment was flushed or deletes were applied. */
+  /** Returns true a segment was flushed or deletes were applied.
+   * 如果segment被flush或者deletes被应用，就返回true
+   * */
   private boolean doFlush(boolean applyAllDeletes) throws IOException {
-    if (tragedy.get() != null) {
+    if (tragedy.get() != null) {// 说明发生严重的异常
       throw new IllegalStateException(
           "this writer hit an unrecoverable error; cannot flush", tragedy.get());
     }
@@ -4190,10 +4286,10 @@ public class IndexWriter
       }
       boolean anyChanges;
 
-      synchronized (fullFlushLock) {
+      synchronized (fullFlushLock) {// 同步，防止并发执行fullFlush
         boolean flushSuccess = false;
         try {
-          long seqNo = docWriter.flushAllThreads();
+          long seqNo = docWriter.flushAllThreads();// flush 所有的DWPTs
           if (seqNo < 0) {
             seqNo = -seqNo;
             anyChanges = true;
@@ -4209,7 +4305,8 @@ public class IndexWriter
         } finally {
           assert Thread.holdsLock(fullFlushLock);
           ;
-          docWriter.finishFullFlush(flushSuccess);
+          //
+          docWriter.finishFullFlush(flushSuccess);// 每次调用flushAllThreads 完成都必须调用finishFullFlush
           processEvents(false);
         }
       }
@@ -4227,7 +4324,7 @@ public class IndexWriter
         return anyChanges;
       }
     } catch (VirtualMachineError tragedy) {
-      tragicEvent(tragedy, "doFlush");
+      tragicEvent(tragedy, "doFlush");//灾难性异常处理，必要时关闭IW
       throw tragedy;
     } finally {
       if (!success) {
@@ -4250,7 +4347,7 @@ public class IndexWriter
               + " reader pool bytesUsed="
               + readerPool.ramBytesUsed());
     }
-    bufferedUpdatesStream.waitApplyAll(this);
+    bufferedUpdatesStream.waitApplyAll(this);// 对所有的segments应用所有的deletes
   }
 
   // for testing only
@@ -5612,12 +5709,14 @@ public class IndexWriter
   /**
    * This method set the tragic exception unless it's already set and closes the writer if
    * necessary. Note this method will not rethrow the throwable passed to it.
+   * 这个方法设置灾难性的exception，除非他已经被设置，并且如有必要会关闭writer。
+   * 这个方法不会将传入的异常再抛出去
    */
   private void tragicEvent(Throwable tragedy, String location) throws IOException {
     try {
       onTragicEvent(tragedy, location);
     } finally {
-      maybeCloseOnTragicEvent();
+      maybeCloseOnTragicEvent();// 将内部所有的处理逻辑都一一关闭
     }
   }
 
@@ -5788,7 +5887,8 @@ public class IndexWriter
    * delete (if present) to IndexWriter. The actual publishing operation is synced on {@code IW ->
    * BDS} so that the {@link SegmentInfo}'s delete generation is always
    * GlobalPacket_deleteGeneration + 1
-   * 将刷新的段、段专用删除（如果有）及其关联的全局删除（如果存在）发布到IndexWriter。
+   * 将刷新的段、段专用删除（如果有）及其关联的全局删除（如果存在）发布到IndexWriter。真实的发布操作是在 IW -> BDS
+   * 上同步的，所以SegmentInfo's 删除代总是 GlobalPacket_deleteGeneration + 1
    * @param forced if <code>true</code> this call will block on the ticket queue if the lock is held
    *     by another thread. if <code>false</code> the call will try to acquire the queue lock and
    *     exits if it's held by another thread.
@@ -5799,8 +5899,9 @@ public class IndexWriter
         ticket -> {
           DocumentsWriterPerThread.FlushedSegment newSegment = ticket.getFlushedSegment();
           FrozenBufferedUpdates bufferedUpdates = ticket.getFrozenUpdates();
-          ticket.markPublished();
+          ticket.markPublished();//标记Published
           if (newSegment == null) { // this is a flushed global deletes package - not a segments
+            // 如果 newSegment == null，说明只有 global deletes package，没有segment
             if (bufferedUpdates != null && bufferedUpdates.any()) { // TODO why can this be null?
               publishFrozenUpdates(bufferedUpdates);
               if (infoStream.isEnabled("IW")) {
@@ -5818,6 +5919,7 @@ public class IndexWriter
                   "IW", "flush: push buffered seg private updates: " + newSegment.segmentUpdates);
             }
             // now publish!
+            // 开始发布
             publishFlushedSegment(
                 newSegment.segmentInfo,
                 newSegment.fieldInfos,

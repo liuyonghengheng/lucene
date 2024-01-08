@@ -19,14 +19,8 @@ package org.apache.lucene.index;
 import static org.apache.lucene.tests.index.DocHelper.TEXT_TYPE_STORED_WITH_TVS;
 
 import com.carrotsearch.randomizedtesting.generators.RandomPicks;
-import java.io.ByteArrayOutputStream;
-import java.io.Closeable;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.PrintStream;
-import java.io.PrintWriter;
-import java.io.StringReader;
-import java.io.StringWriter;
+
+import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
@@ -2469,6 +2463,76 @@ public class TestIndexWriter extends LuceneTestCase {
 //    r.close();
     dir.close();
   }
+
+  public void testGetReaders() throws Exception {
+    Directory dir = newDirectory();
+    IndexWriterConfig iwc = new IndexWriterConfig(new MockAnalyzer(random()));
+    IndexWriter w = new IndexWriter(dir, iwc);
+    Document doc = new Document();
+
+
+    doc.add(new TextField("del", "foo", Field.Store.YES));
+    w.addDocument(doc);
+
+    w.deleteDocuments(new Term("del", "foo"));
+
+    w.flush();
+
+    doc.add(new TextField("a", "foo", Field.Store.YES));
+    w.addDocument(doc);
+
+    doc = new Document();
+    doc.add(new TextField("a", "xxx", Field.Store.YES));
+    w.addDocument(doc);
+
+    doc = new Document();
+    doc.add(new TextField("b", "foo", Field.Store.YES));
+    w.addDocument(doc);
+
+    doc = new Document();
+    doc.add(new TextField("foo", "bar", Field.Store.YES));
+    doc.add(new TextField("c", "xxxc", Field.Store.YES));
+    w.addDocument(doc);
+
+    doc = new Document();
+    doc.add(new TextField("foo", "bard", Field.Store.YES));
+    doc.add(new TextField("d", "xxxd", Field.Store.YES));
+    w.addDocument(doc);
+
+    w.commit();
+
+    doc = new Document();
+    doc.add(new TextField("foo", "bar2", Field.Store.YES));
+    doc.add(new TextField("c", "bar2", Field.Store.YES));
+    w.updateDocuments(new Term("foo", "bar"), Arrays.asList(doc));
+    // Should not delete the document; with LUCENE-5239 the
+    // "foo" from the 2nd delete term would incorrectly
+    // match field a's "foo":
+    w.deleteDocuments(new Term("a", "xxx"));
+//    IndexReader r = DirectoryReader.open(w);
+    w.flush();
+    w.commit();
+
+
+    DirectoryReader r = w.getReader(true,true);
+    r.close();
+
+
+
+
+    w.close();
+
+    // Make sure document was not (incorrectly) deleted:
+//    assertEquals(1, r.numDocs());
+//    r.close();
+    dir.close();
+  }
+
+
+
+
+
+
 
   public void testHasUncommittedChangesAfterException() throws IOException {
     Analyzer analyzer = new MockAnalyzer(random());

@@ -61,6 +61,29 @@ import org.apache.lucene.util.InfoStream;
  * slice which ensures the consistency of the update. If the update fails before the DeleteSlice
  * could have been updated the deleteTerm will also not be added to its private deletes neither to
  * the global deletes.
+ *
+ * DocumentsWriterDelete队列是一个非阻塞队列，把pending deletes （后续需要做的删除）连接起来。
+ * 与其他队列的实现方式相比，区别是，这个队列只维护队列的尾部。
+ * 一个删除队列总是在包含一组DWPT和global delete pool组成的上下文中使用，后面解释。每一个DWPT和global pool都需要维护
+ * 它们自己的头，当然这个头是delete queue中的一个节点。DWPT和global pool之间的区别在于，DWPT在添加了
+ * 第一个文档后开始维护头（初始化的值是当前delete queue的尾），因为对于其segments，私有删除只有在有文档之后才需要进行。
+ * 因为在这之前的删除和这个新的DWPT或者说segments都没有关系，global pool通过将哨兵实例
+ * 作为其初始头，在创建此实例后就开始维护头。
+ *
+ * 由于每个DeleteSlice实例维护自己的头，delete queue中没有头，所有的 DeleteSlice 的头之前的 Node 是没有引用的，
+ * 所以垃圾收集器会负责为我们裁减列表。
+ * 并且列表中仍然相关的所有节点都还由DWPT的私有DeleteSlice直接或间接引用或被全局BufferedUpdates切片引用。
+ *
+ * 每个DWPT以及global delete pool都维护其专用DeleteSlice实例。在DWPT的情况下，更新slice相当于/说明原子地完成了doc。
+ * slice更新保证了与同一indexing session中的所有其他updates之间的“先发生后发生”关系。DWPT更新文档时：
+ * 1. 消费一个文档并完成对他的处理
+ * 2. 更新其私有的DeleteSlice，方法是调用updateSlice（DeleteSlice）或add（Node，DeleteSlice）（如果文档具有delTerm）
+ * 3. 将slice中的所有删除应用于其私有的BufferedUpdates并重置它
+ * 4. 增加其内部文档id，其实是seqno，就是这个seqno 就代表了所谓的先后关系
+ *
+ * 如上步骤，DWPT也不会应用其当前文档delete term，直到它更新了其delete slice，以确保更新的一致性。
+ * 如果在DeleteSlice更新之前更新失败，deleteTerm也不会添加到其private deletes，也不会添加到global deletes，
+ * 但是会通过其他方式删除，从而才能保证真正的一致性。
  */
 final class DocumentsWriterDeleteQueue implements Accountable, Closeable {
 
@@ -88,7 +111,7 @@ final class DocumentsWriterDeleteQueue implements Accountable, Closeable {
   /**
    * Generates the sequence number that IW returns to callers changing the index, showing the
    * effective serialization of all operations.
-   * 生成IW更改索引的序列号，并返回给调用者，显示所有操作的有效序列化。这个是全局的，
+   * 生成IW修改索引的序列号，并返回给调用者，显示所有操作的有效序列化。这个是全局的，一个操作一个编号（一个操作可能有多个doc）
    */
   private final AtomicLong nextSeqNo;
 
@@ -606,10 +629,14 @@ final class DocumentsWriterDeleteQueue implements Accountable, Closeable {
    * queue and set the {@link #getMaxSeqNo()} based on the given maxNumPendingOps. This method can
    * only be called once, subsequently the returned queue should be used.
    *
+   * 在flush时，将DeleteQueue转换为下一个DeleteQueue。这会携带gen代到下一个queue并且基于给定的maxNumPendingOps
+   * 设置getMaxSeqNo()。这个方法只能被调用一次，后续需要使用返回的queue。
    * @param maxNumPendingOps the max number of possible concurrent operations that will execute on
    *     this queue after it was advanced. This corresponds the the number of DWPTs that own the
    *     current queue at the moment when this queue is advanced since each these DWPTs can
    *     increment the seqId after we advanced it.
+   * queue完成advanced之后，可能在这个queue中执行的并发操作的最大数量。这对应于当前队列advanced时拥有该队列的DWPT的数量，
+   * 因为在我们advanced后，每个DWPT都可以增加seqId。
    * @return a new queue as a successor of this queue.
    */
   synchronized DocumentsWriterDeleteQueue advanceQueue(int maxNumPendingOps) {
@@ -618,13 +645,15 @@ final class DocumentsWriterDeleteQueue implements Accountable, Closeable {
     }
     advanced = true;
     long seqNo = getLastSequenceNumber() + maxNumPendingOps + 1;
-    maxSeqNo = seqNo;
+    maxSeqNo = seqNo;//
     return new DocumentsWriterDeleteQueue(
         infoStream,
         generation + 1,
         seqNo + 1,
         // don't pass ::getMaxCompletedSeqNo here b/c otherwise we keep an reference to this queue
         // and this will be a memory leak since the queues can't be GCed
+        // 不要使用 ::getMaxCompletedSeqNo 这种 lambda 表达式，这会导致我们在外部持有一个对这个queue的引用，
+        // 并且这会因为无法Gc从而导致内存泄漏
         getPrevMaxSeqIdSupplier(nextSeqNo));
   }
 

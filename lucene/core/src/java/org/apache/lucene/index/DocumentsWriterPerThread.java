@@ -197,12 +197,14 @@ final class DocumentsWriterPerThread implements Accountable {
     }
   }
 
-  /** Anything that will add N docs to the index should reserve first to make sure it's allowed. */
+  /** Anything that will add N docs to the index should reserve first to make sure it's allowed.
+   * 看一下是否超过最大doc数量阈值的限制，超过直接报异常
+   * */
   private void reserveOneDoc() {
     if (pendingNumDocs.incrementAndGet() > IndexWriter.getActualMaxDocs()) {
       // Reserve failed: put the one doc back and throw exc:
       pendingNumDocs.decrementAndGet();
-      throw new IllegalArgumentException(
+      throw new IllegalArgumentException(//超过最大值，抛出异常
           "number of documents in the index cannot exceed " + IndexWriter.getActualMaxDocs());
     }
   }
@@ -237,6 +239,13 @@ final class DocumentsWriterPerThread implements Accountable {
           // document, so the counter will be "wrong" in that case, but
           // it's very hard to fix (we can't easily distinguish aborting
           // vs non-aborting exceptions):
+          /**
+           * 即使遇到异常，doc也会被添加（但是会被标记为删除），所以我们不需要un-reserve
+           * 来回退，在这个时间点。终止异常可能会丢失不止一个doc，所以在这种情况下
+           * 这里的记数可能不准，但是很难定位（我们很难分辨aborting和non-aborting 异常）
+           */
+          // 所以这里只有增加，即使下面的处理出现异常了，也不会减1,或者减n
+          // 虽然记数可能有问题，但是数据本身没问题。
           reserveOneDoc();
           try {
             indexingChain.processDocument(numDocsInRAM++, doc);
@@ -245,11 +254,12 @@ final class DocumentsWriterPerThread implements Accountable {
           }
         }
         allDocsIndexed = true;
-        return finishDocuments(deleteNode, docsInRamBefore);//记录删除node 和 对应的 docId
+        return finishDocuments(deleteNode, docsInRamBefore);//记录删除node 和 对应的 docId，给这个操作生成 seqno
       } finally {
         if (!allDocsIndexed && !aborted) {
           // the iterator threw an exception that is not aborting
           // go and mark all docs from this block as deleted
+          // 出现异常时 将已经处理的doc标记为删除
           deleteLastDocs(numDocsInRAM - docsInRamBefore);
         }
       }
@@ -269,8 +279,8 @@ final class DocumentsWriterPerThread implements Accountable {
      * 我们真正的完成一个doc 分成两步：
      * 1. 把删除放入删除队列并更新slice。
      * 2. 增加DWPT内部私有的 docid，这个doc id 是 DocumentsWriterDeleteQueue.nextSeqNo,是全局的！
-     * 和 docIdUpTo 又不是一回事，
-     * 更新的slice 数据到底是啥： 是从上次更新slice开始直到现在所发生的所有的删除操作，
+     * 和 docIdUpTo 又不是一回事
+     * 更新的slice 数据到底是啥： 是从上次更新slice开始直到现在所发生的所有的删除操作
      * 注意这里所有的删除是记录在deleteQueue中的
      */
     // Apply delTerm only after all indexing has
@@ -302,6 +312,13 @@ final class DocumentsWriterPerThread implements Accountable {
   // stale nor the entire IW to abort and shutdown. In such a case
   // we only mark these docs as deleted and turn it into a livedocs
   // during flush
+  /**
+   * 更新是原子的，只要更新过程中有一个doc发生异常，把这一批中的已经更新的doc都删除。
+   * 标记最后的N个doc为删除，被用在异常的场景。有很多场景都会触发doc失败
+   * 例如解析过程中发生异常，但是并没有导致DWPT为陈旧/过期，也没有导致IW失败或者终止。
+   * 在这样的场景下，我们标记这些doc为删除，并且在flush时把他们转移到 livedocs（
+   * 就是从这里边删除）
+   */
   private void deleteLastDocs(int docCount) {
     int from = numDocsInRAM - docCount;
     int to = numDocsInRAM;
@@ -318,6 +335,13 @@ final class DocumentsWriterPerThread implements Accountable {
     // exception we'd have to go off and flush new deletes
     // which is risky (likely would hit some other
     // confounding exception).
+    /**
+     * 注意： 我们不会在这里触发flush。这里需要小心内存泄漏的问题，如果你的应用
+     * 尝试添加doc，但是每次都总是遇到non-aborting异常。如果允许在这里flush
+     * 处理起来可能会非常复杂和混乱，因为这个函数只是在捕获异常的时候才会被调用，
+     * 但是处理所有的异常我们应该在这个函数外面，并且刷新新的deletes时非常危险的
+     * （可能会命中其他的一些混乱的异常）
+     */
   }
 
   /** Returns the number of RAM resident documents in this {@link DocumentsWriterPerThread} */

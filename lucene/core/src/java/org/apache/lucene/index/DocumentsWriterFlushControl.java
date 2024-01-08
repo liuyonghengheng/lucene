@@ -57,6 +57,8 @@ final class DocumentsWriterFlushControl implements Accountable, Closeable {
   // threads) to help flushing
   private final Queue<DocumentsWriterPerThread> flushQueue = new LinkedList<>();
   // only for safety reasons if a DWPT is close to the RAM limit
+  // 在DWPT是pending状态，并且整体才做full flush，
+  // 而且在DWPT接近RAM限制时，出于安全原因才会将其放入blockedFlushes中
   private final Queue<DocumentsWriterPerThread> blockedFlushes = new LinkedList<>();
   // flushingWriters holds all currently flushing writers. There might be writers in this list that
   // are also in the flushQueue which means that writers in the flushingWriters list are not
@@ -395,25 +397,25 @@ final class DocumentsWriterFlushControl implements Accountable, Closeable {
   private void checkoutAndBlock(DocumentsWriterPerThread perThread) {
     assert Thread.holdsLock(this);
     assert perThreadPool.isRegistered(perThread);
-    assert perThread.isHeldByCurrentThread();
-    assert perThread.isFlushPending() : "can not block non-pending threadstate";
-    assert fullFlush : "can not block if fullFlush == false";
+    assert perThread.isHeldByCurrentThread();//确保被当前线程持有
+    assert perThread.isFlushPending() : "can not block non-pending threadstate";//确保是pending状态
+    assert fullFlush : "can not block if fullFlush == false";//确保现在在做fullFlush
     numPending--; // write access synced
-    blockedFlushes.add(perThread);
-    boolean checkedOut = perThreadPool.checkout(perThread);
+    blockedFlushes.add(perThread);//添加到blockedFlushes中
+    boolean checkedOut = perThreadPool.checkout(perThread);//从perThreadPool中check出来
     assert checkedOut;
   }
 
   private synchronized DocumentsWriterPerThread checkOutForFlush(
       DocumentsWriterPerThread perThread) {
     assert Thread.holdsLock(this);
-    assert perThread.isFlushPending();
-    assert perThread.isHeldByCurrentThread();
-    assert perThreadPool.isRegistered(perThread);
+    assert perThread.isFlushPending();//确保是FlushPending状态
+    assert perThread.isHeldByCurrentThread();//确保被当先线程持有
+    assert perThreadPool.isRegistered(perThread);//确保在perThreadPool中
     try {
-      addFlushingDWPT(perThread);
+      addFlushingDWPT(perThread);//添加到flushingWriters中
       numPending--; // write access synced
-      boolean checkedOut = perThreadPool.checkout(perThread);
+      boolean checkedOut = perThreadPool.checkout(perThread);//从perThreadPool中检出
       assert checkedOut;
       return perThread;
     } finally {
@@ -424,6 +426,7 @@ final class DocumentsWriterFlushControl implements Accountable, Closeable {
   private void addFlushingDWPT(DocumentsWriterPerThread perThread) {
     assert flushingWriters.contains(perThread) == false : "DWPT is already flushing";
     // Record the flushing DWPT to reduce flushBytes in doAfterFlush
+    // 记录flushing DWPT 来降低flushBytes in doAfterFlush
     flushingWriters.add(perThread);
   }
 
@@ -547,7 +550,7 @@ final class DocumentsWriterFlushControl implements Accountable, Closeable {
   long markForFullFlush() {
     final DocumentsWriterDeleteQueue flushingQueue;
     long seqNo;
-    synchronized (this) {
+    synchronized (this) { //同步
       assert fullFlush == false
           : "called DWFC#markForFullFlush() while full flush is still running";
       assert fullFlushMarkDone == false : "full flush collection marker is still set to true";
@@ -555,17 +558,24 @@ final class DocumentsWriterFlushControl implements Accountable, Closeable {
       flushingQueue = documentsWriter.deleteQueue;
       // Set a new delete queue - all subsequent DWPT will use this queue until
       // we do another full flush
+      // 设置一个新的delete queue，所有后续的DWPT都会使用这个新的queue，直到下一次flush
       perThreadPool
           .lockNewWriters(); // no new thread-states while we do a flush otherwise the seqNo
       // accounting might be off
+      // 当我们进行刷新时没有新的线程状态，否则seqNo 计数可能会关闭
+      // 过程中不能有新的dwpt生成！类似信号量，只有减少到0才能生成新的dwpt，否则生成就一直被阻塞
       try {
         // Insert a gap in seqNo of current active thread count, in the worst case each of those
         // threads now have one operation in flight.  It's fine
         // if we have some sequence numbers that were never assigned:
+        // 在seqNo中插入一段间隙，值就是当前活跃的DWPTS，在最差的情况就是每一个DWPT都有一个操作在执行中。
+        // 为什么是不可能DWPT有多个操作？ 很简单，因为这里获取是getLastSequenceNumber()，DWPT完成操作之后通过
+        // getNextSequenceNumber() 递增和获取seqno，他们最终都是去拿 deletequeue 的nextSeqNo，这个值是原子的
+        // 如果我们有一些从未分配过的序列号，那也没关系（因为他本身是用来表示操作完成的顺序的，只要能保证顺序不乱即可）：
         DocumentsWriterDeleteQueue newQueue =
             documentsWriter.deleteQueue.advanceQueue(perThreadPool.size());
         seqNo = documentsWriter.deleteQueue.getMaxSeqNo();
-        documentsWriter.resetDeleteQueue(newQueue);
+        documentsWriter.resetDeleteQueue(newQueue);//直接将老的deleteQueue替换掉
       } finally {
         perThreadPool.unlockNewWriters();
       }
@@ -580,7 +590,7 @@ final class DocumentsWriterFlushControl implements Accountable, Closeable {
             if (next.isFlushPending() == false) {
               setFlushPending(next);
             }
-            flushingDWPT = checkOutForFlush(next);
+            flushingDWPT = checkOutForFlush(next);// 从perThreadPool中checkout出来
           }
           assert flushingDWPT != null
               : "DWPT must never be null here since we hold the lock and it holds documents";
@@ -624,6 +634,7 @@ final class DocumentsWriterFlushControl implements Accountable, Closeable {
 
   /**
    * Prunes the blockedQueue by removing all DWPTs that are associated with the given flush queue.
+   * 通过移除所有的和给定的flush queue 相关的DWPTs，来清理和裁减blockedQueue
    */
   private void pruneBlockedQueue(final DocumentsWriterDeleteQueue flushingQueue) {
     assert Thread.holdsLock(this);
@@ -631,10 +642,11 @@ final class DocumentsWriterFlushControl implements Accountable, Closeable {
     while (iterator.hasNext()) {
       DocumentsWriterPerThread blockedFlush = iterator.next();
       if (blockedFlush.deleteQueue == flushingQueue) {
-        iterator.remove();
-        addFlushingDWPT(blockedFlush);
+        iterator.remove();// 从blockedFlushes中删除
+        addFlushingDWPT(blockedFlush);// 添加到flushingWriters中
         // don't decr pending here - it's already done when DWPT is blocked
-        flushQueue.add(blockedFlush);
+        // 不需要递减 pending 的数量 - 因为在DWPT被阻塞时就已经做过了
+        flushQueue.add(blockedFlush);// 添加到flushQueue中
       }
     }
   }
@@ -646,13 +658,13 @@ final class DocumentsWriterFlushControl implements Accountable, Closeable {
     try {
       if (!blockedFlushes.isEmpty()) {
         assert assertBlockedFlushes(documentsWriter.deleteQueue);
-        pruneBlockedQueue(documentsWriter.deleteQueue);
+        pruneBlockedQueue(documentsWriter.deleteQueue);//把block的DWPT添加到flushQueue
         assert blockedFlushes.isEmpty();
       }
     } finally {
       fullFlushMarkDone = fullFlush = false;
 
-      updateStallState();
+      updateStallState();//释放锁
     }
   }
 

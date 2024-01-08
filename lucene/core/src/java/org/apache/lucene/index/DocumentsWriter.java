@@ -572,6 +572,7 @@ final class DocumentsWriter implements Closeable, Accountable {
   synchronized void resetDeleteQueue(DocumentsWriterDeleteQueue newQueue) {
     assert deleteQueue.isAdvanced();
     assert newQueue.isAdvanced() == false;
+    // 确保 sepno 正确
     assert deleteQueue.getLastSequenceNumber() <= newQueue.getLastSequenceNumber();
     assert deleteQueue.getMaxSeqNo() <= newQueue.getLastSequenceNumber()
         : "maxSeqNo: " + deleteQueue.getMaxSeqNo() + " vs. " + newQueue.getLastSequenceNumber();
@@ -657,7 +658,9 @@ final class DocumentsWriter implements Closeable, Accountable {
       flushingDeleteQueue = deleteQueue;
       /* Cutover to a new delete queue.  This must be synced on the flush control
        * otherwise a new DWPT could sneak into the loop with an already flushing
-       * delete queue */
+       * delete queue
+       * 切换到新的删除队列。这必须在flush control上同步执行，否则新的DWPT可能会偷偷进入已经在刷新的删除队列的循环
+       *  */
       seqNo = flushControl.markForFullFlush(); // swaps this.deleteQueue synced on FlushControl
       assert setFlushingDeleteQueue(flushingDeleteQueue);
     }
@@ -707,7 +710,7 @@ final class DocumentsWriter implements Closeable, Accountable {
       }
       assert setFlushingDeleteQueue(null);
       if (success) {
-        // Release the flush lock
+        // Release the flush lock，释放锁，把block的DWPT添加到flushQueue继续处理
         flushControl.finishFullFlush();
       } else {
         flushControl.abortFullFlushes();
@@ -716,6 +719,7 @@ final class DocumentsWriter implements Closeable, Accountable {
       pendingChangesInCurrentFullFlush = false;
       applyAllDeletes(); // make sure we do execute this since we block applying deletes during full
       // flush
+      // 确保我们执行这个函数，因为我们在full flush 过程中，阻塞了applying deletes
     }
   }
 

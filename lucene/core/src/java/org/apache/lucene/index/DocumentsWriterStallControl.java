@@ -53,7 +53,7 @@ final class DocumentsWriterStallControl {
       if (stalled) {
         wasStalled = true;
       }
-      notifyAll();
+      notifyAll();//唤醒所有的被阻塞的线程
     }
   }
 

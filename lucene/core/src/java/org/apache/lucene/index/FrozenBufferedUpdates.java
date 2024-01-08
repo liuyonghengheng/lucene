@@ -53,6 +53,7 @@ final class FrozenBufferedUpdates {
       RamUsageEstimator.NUM_BYTES_OBJECT_REF + Integer.BYTES + 24;
 
   // Terms, in sorted order:
+  // 有序的Terms
   final PrefixCodedTerms deleteTerms;
 
   // Parallel array of deleted query, and the docIDUpto for each

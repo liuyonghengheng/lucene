@@ -65,6 +65,7 @@ final class BufferedUpdatesStream implements Accountable {
 
   // Appends a new packet of buffered deletes to the stream,
   // setting its generation:
+  // 把新的packet of buffered deletes追加到stream，设置他的代
   synchronized long push(FrozenBufferedUpdates packet) {
     /*
      * The insert operation must be atomic. If we let threads increment the gen
@@ -72,6 +73,9 @@ final class BufferedUpdatesStream implements Accountable {
      * With DWPT this is possible if two or more flushes are racing for pushing
      * updates. If the pushed packets get our of order would loose documents
      * since deletes are applied to the wrong segments.
+     * 这个插入操作必须是原子的，如果我们让线程增加gen，然后推送数据包，我们就有数据包出错/乱序的风险。
+     * 有了DWPT，如果两次或两次以上的flushes正在竞相推送updates，这是可能的。如果被推送的包出错将会丢失
+     * docs 因为deletes 被应用到了错误的segments。
      */
     packet.setDelGen(nextGen++);
     assert packet.any();
