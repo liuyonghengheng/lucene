@@ -34,6 +34,9 @@ final class DocumentsWriterFlushQueue {
   private final AtomicInteger ticketCount = new AtomicInteger();
   private final ReentrantLock purgeLock = new ReentrantLock();
 
+  /**
+   * 冻结deleteQueue的global updates buffer，并生成ticket
+   */
   synchronized boolean addDeletes(DocumentsWriterDeleteQueue deleteQueue) throws IOException {
     // first inc the ticket count - freeze opens a window for #anyChanges to fail
     incTickets();
@@ -71,9 +74,11 @@ final class DocumentsWriterFlushQueue {
     try {
       // prepare flush freezes the global deletes - do in synced block!
       // prepareFlush 会冻结 global deletes，并生成冻结的globalUpdates
-      // 将当前 deleteQueue tail和 deleteSlice 以及 golobalSlice 对齐，并将删除应用到updates
+      // 将当前 deleteQueue tail和 deleteSlice 以及 golobalSlice 对齐，并将删除应用到updates，
+      // 最终冻结global deletes，并生成冻结的globalUpdates，然后清理globalUpdates
+      // 最后将根据生成的 FrozenBufferedUpdates 创建ticket
       final FlushTicket ticket = new FlushTicket(dwpt.prepareFlush(), true);
-      queue.add(ticket);//将ticket添加到queue
+      queue.add(ticket);//将ticket添加到queue，后续按这个顺序处理segments的删除
       success = true;
       return ticket;
     } finally {
@@ -87,6 +92,7 @@ final class DocumentsWriterFlushQueue {
     assert ticket.hasSegment;
     // the actual flush is done asynchronously and once done the FlushedSegment
     // is passed to the flush ticket
+    // 实际的刷新是异步完成的，一旦完成，FlushedSegment就会传递给刷新票证
     ticket.setSegment(segment);
   }
 
@@ -107,7 +113,7 @@ final class DocumentsWriterFlushQueue {
       final FlushTicket head;
       final boolean canPublish;
       synchronized (this) {
-        head = queue.peek(); //拿到队头，判断是否可以publish，如果可以，则把处理之后从队列中删除，然后循环执行，知道找到不能publish的ticket，跳出循环
+        head = queue.peek(); //按照入队列的顺序处理，拿到队头，判断是否可以publish，如果可以，则把处理之后从队列中删除，然后循环执行，知道找到不能publish的ticket，跳出循环
         canPublish = head != null && head.canPublish(); // do this synced
       }
       if (canPublish) {
@@ -122,7 +128,7 @@ final class DocumentsWriterFlushQueue {
 
         } finally {
           synchronized (this) {
-            // finally remove the published ticket from the queue
+            // finally remove the published ticket from the queue，从队列中删除
             final FlushTicket poll = queue.poll();
             decTickets();
             // we hold the purgeLock so no other thread should have polled:
@@ -137,7 +143,7 @@ final class DocumentsWriterFlushQueue {
 
   void forcePurge(IOConsumer<FlushTicket> consumer) throws IOException {
     assert !Thread.holdsLock(this);
-    purgeLock.lock();
+    purgeLock.lock();//加锁，保证顺序处理ticket队列
     try {
       innerPurge(consumer);
     } finally {

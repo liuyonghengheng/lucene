@@ -63,9 +63,9 @@ final class FreqProxTermsWriter extends TermsHash {
       for (Term deleteTerm : deleteTerms) {
         DocIdSetIterator postings = iterator.nextTerm(deleteTerm.field(), deleteTerm.bytes());
         if (postings != null) {
-          int delDocLimit = segDeletes.get(deleteTerm);
+          int delDocLimit = segDeletes.get(deleteTerm);//获取删除term所在的 doc number
           assert delDocLimit < PostingsEnum.NO_MORE_DOCS;
-          int doc;
+          int doc;//将比delDocLimit 小的，也就是在这个删除term之前进入buffer的数据中，term能匹配上这个删除term的所有的doc number，锁对应的bit，设置为0,代表删除！
           while ((doc = postings.nextDoc()) < delDocLimit) {
             if (state.liveDocs == null) {//初始化
               state.liveDocs = new FixedBitSet(state.segmentInfo.maxDoc());
@@ -73,7 +73,7 @@ final class FreqProxTermsWriter extends TermsHash {
             }
             if (state.liveDocs.get(doc)) {
               state.delCountOnFlush++;
-              state.liveDocs.clear(doc);//将对应的bit设置成0
+              state.liveDocs.clear(doc);//将对应的bit设置成0，代表删除
             }
           }
         }

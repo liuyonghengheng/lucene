@@ -155,7 +155,7 @@ final class FrozenBufferedUpdates {
     return applied.getCount() == 0;
   }
 
-  /**
+  /** 应用pending的delete-by-term,delete-by-query,doc-valuse-updates 到index的所有的segments ，返回删除或者更新的doc的数量
    * Applies pending delete-by-term, delete-by-query and doc values updates to all segments in the
    * index, returning the number of new deleted or updated documents.
    */
@@ -440,7 +440,7 @@ final class FrozenBufferedUpdates {
 
     return delCount;
   }
-
+  /** 将term delete 应用到segments！*/
   private long applyTermDeletes(BufferedUpdatesStream.SegmentState[] segStates) throws IOException {
 
     if (deleteTerms.size() == 0) {

@@ -640,13 +640,14 @@ public class IndexWriter
        * - 防止并发索引中的DWPT的刷新和正在应用的删除被应用，不能有并发的flush
        * - 在被更新过的SIS(segmentInfos)上，打开一个SDR(StandardDirectoryReader)，最后根据最新的SIS打开SDR
        *
-       * 为了防止并发的flushs，我们调用DocumentsWriter.flushAllThreads，这个函数会换出deleteQueue(在这个和
-       * 接下来的 full flush之间，是有一个强制的先后关系的) 以及通知FlushControl他需要阻止任何新的DWPTs做flush操作，直到我们完成（
-       * DocumentsWriter.finishFullFlush(boolean)）.所有的这些都被fullFlushLock保护着，从而阻止同时发生多个full flushes（阻塞flush）。
+       * 我们调用DocumentsWriter.flushAllThreads时，这个函数会换出deleteQueue(在这个和
+       * 接下来的 full flush之间，是有一个强制的先后关系的) 以及通知FlushControl他需要阻止任何新的DWPTs做flush操作
+       * (如 DW.updateDocuments 可能因为内存或doc达到阈值而导致的DWPTflush，但是在这种情况下会被block住)，直到我们当前的full flush完成(
+       * DocumentsWriter.finishFullFlush(boolean)).所有的这些都被fullFlushLock保护着，从而阻止同时发生多个full flushes（阻塞flushes）。
        * 一旦DocWriter已经完成初始化了一个full flush，我们就可以继续flush 并应用deletes & updates 到已经写完成的segments，而不需要担心
-       * 并发索引的indexing DWPTs（不会阻塞写入）。重要的方面是他们都发生在 DocumentsWriter#flushAllThread() 和
+       * 并发索引的indexing DWPTs（不会阻塞写入）。重要的一点是他们都发生在 DocumentsWriter#flushAllThread() 和
        *  DocumentsWriter#finishFullFlush(boolean) 之间，因此一旦flush被标记成完成，deletes就会被应用到已经刷盘的segments，
-       * 而不保证在这之间添加的文档（在更新的情况下产生的），在打开SDR时，被刷新和变得可见。
+       * 但是不保证在这之间添加的文档（在更新的情况下产生的，他们会被写入新生成的的DWPT），在打开SDR时，被刷新和变得可见。
        */
       boolean success = false;
       synchronized (fullFlushLock) { // 防止多个full flush 并发执行，调用 flushAllThreads 代码块都需要同步处理
@@ -2861,6 +2862,8 @@ public class IndexWriter
     long nextGen = bufferedUpdatesStream.push(packet);
     // Do this as an event so it applies higher in the stack when we are not holding
     // DocumentsWriterFlushQueue.purgeLock:
+    // 将此作为一个事件执行，以便在我们不持有DocumentsWriterFlushQueue.purgeLock时，
+    // 它能在堆栈的更高处被应用：
     eventQueue.add(
         w -> {
           try {
@@ -2884,6 +2887,7 @@ public class IndexWriter
   /**
    * Atomically adds the segment private delete packet and publishes the flushed segments
    * SegmentInfo to the index writer.
+   * 原子的添加segment的局部删除package，并且发布刷新过的segments SegmentInfo 到 index writer
    */
   private synchronized void publishFlushedSegment(
       SegmentCommitInfo newSegment,
@@ -2900,28 +2904,33 @@ public class IndexWriter
       if (infoStream.isEnabled("IW")) {
         infoStream.message("IW", "publishFlushedSegment " + newSegment);
       }
-
+      // 将‘应用全局delete’添加到事件队列中
       if (globalPacket != null && globalPacket.any()) {
         publishFrozenUpdates(globalPacket);
       }
 
       // Publishing the segment must be sync'd on IW -> BDS to make the sure
       // that no merge prunes away the seg. private delete packet
+      // 将‘应用局部delete’添加到事件队列中
+      // 发布segment必须在 IW -> BDS 上同步的执行，这么做是为了保证 没有merge
+      // 会删除segment的内部的 delete packet
       final long nextGen;
       if (packet != null && packet.any()) {
         nextGen = publishFrozenUpdates(packet);
       } else {
         // Since we don't have a delete packet to apply we can get a new
         // generation right away
+        // 由于我们没有可应用的delete packet，我们可以立即获得新代
         nextGen = bufferedUpdatesStream.getNextGen();
         // No deletes/updates here, so marked finished immediately:
+        // 这里没有deletes/updates，索引立刻标记为完成，和正常的标记是一样的，会根据顺序处理segments的状态，整体的completedDelGen
         bufferedUpdatesStream.finishedSegment(nextGen);
       }
       if (infoStream.isEnabled("IW")) {
         infoStream.message(
             "IW", "publish sets newSegment delGen=" + nextGen + " seg=" + segString(newSegment));
       }
-      newSegment.setBufferedDeletesGen(nextGen);
+      newSegment.setBufferedDeletesGen(nextGen);//设置新segments的代
       segmentInfos.add(newSegment);
       published = true;
       checkpoint();
@@ -4285,11 +4294,12 @@ public class IndexWriter
         infoStream.message("IW", "  index before flush " + segString());
       }
       boolean anyChanges;
-
-      synchronized (fullFlushLock) {// 同步，防止并发执行fullFlush
+      // 同步，防止并发执行fullFlush
+      // 所有的flushAllThreads相关的代码块都需要加fullFlushLock
+      synchronized (fullFlushLock) {
         boolean flushSuccess = false;
         try {
-          long seqNo = docWriter.flushAllThreads();// flush 所有的DWPTs
+          long seqNo = docWriter.flushAllThreads();// flush 所有的DWPTs，切换deleteQueue，冻结 updateBuffer
           if (seqNo < 0) {
             seqNo = -seqNo;
             anyChanges = true;
@@ -4297,20 +4307,23 @@ public class IndexWriter
             anyChanges = false;
           }
           if (!anyChanges) {
-            // flushCount is incremented in flushAllThreads
+            // 如果有修改的话会在 flushAllThreads 中递增，这里处理一下没有修改的情况
             flushCount.incrementAndGet();
           }
+          //将删除数据应用到segments（只是放在事件队列中等待处理），发布segments
           publishFlushedSegments(true);
           flushSuccess = true;
         } finally {
           assert Thread.holdsLock(fullFlushLock);
-          ;
-          //
-          docWriter.finishFullFlush(flushSuccess);// 每次调用flushAllThreads 完成都必须调用finishFullFlush
+          // 每次调用flushAllThreads 完成都必须调用finishFullFlush
+          // 如果不再同步块中，多个full flush 会互相影响，比如这个finish可能会导致并发的full flush
+          // segments 生成相关的人物已经完成
+          docWriter.finishFullFlush(flushSuccess);
+          // 处理eventQueue中的事件！这里会处理全局term删除，即全局deletes package
           processEvents(false);
         }
       }
-
+      // 应用BufferedUpdatesStream中所有的还没有处理完的全局deletes package，按顺序执行所有的package的应用
       if (applyAllDeletes) {
         applyAllDeletesAndUpdates();
       }
@@ -5722,6 +5735,7 @@ public class IndexWriter
 
   private void maybeCloseOnTragicEvent() throws IOException {
     // We cannot hold IW's lock here else it can lead to deadlock:
+    // 我们不能在这里持有 IW的锁，否则会导致死锁
     assert Thread.holdsLock(this) == false;
     assert Thread.holdsLock(fullFlushLock) == false;
     // if we are already closed (e.g. called by rollback), this will be a no-op.
@@ -5887,28 +5901,34 @@ public class IndexWriter
    * delete (if present) to IndexWriter. The actual publishing operation is synced on {@code IW ->
    * BDS} so that the {@link SegmentInfo}'s delete generation is always
    * GlobalPacket_deleteGeneration + 1
-   * 将刷新的段、段专用删除（如果有）及其关联的全局删除（如果存在）发布到IndexWriter。真实的发布操作是在 IW -> BDS
-   * 上同步的，所以SegmentInfo's 删除代总是 GlobalPacket_deleteGeneration + 1
+   *
    * @param forced if <code>true</code> this call will block on the ticket queue if the lock is held
    *     by another thread. if <code>false</code> the call will try to acquire the queue lock and
    *     exits if it's held by another thread.
+   *
+   * 将刷新完的段、段内部删除（如果有）及其关联的全局删除（如果存在）发布到IndexWriter。真实的发布操作是在 IW -> BDS
+   * 上同步的，所以SegmentInfo's 删除代总是 GlobalPacket_deleteGeneration + 1
+   *
+   * 如果传入参数true，这个调用会被ticket queue阻塞，如果锁已经被另外的线程持有。如果参数是false，这个调用会尝试申请
+   * 队列锁，并且如果锁已经被其他的线程持有，就会直接退出。
    */
   private void publishFlushedSegments(boolean forced) throws IOException {
     docWriter.purgeFlushTickets(
         forced,
         ticket -> {
           DocumentsWriterPerThread.FlushedSegment newSegment = ticket.getFlushedSegment();
-          FrozenBufferedUpdates bufferedUpdates = ticket.getFrozenUpdates();
+          FrozenBufferedUpdates bufferedUpdates = ticket.getFrozenUpdates();//冻结的全局deletes
           ticket.markPublished();//标记Published
           if (newSegment == null) { // this is a flushed global deletes package - not a segments
             // 如果 newSegment == null，说明只有 global deletes package，没有segment
             if (bufferedUpdates != null && bufferedUpdates.any()) { // TODO why can this be null?
+              // 直接发布FrozenUpdates，应用所有的全局删除
               publishFrozenUpdates(bufferedUpdates);
               if (infoStream.isEnabled("IW")) {
                 infoStream.message("IW", "flush: push buffered updates: " + bufferedUpdates);
               }
             }
-          } else {
+          } else {// 如果newSegment不为空，则需要发布segments
             assert newSegment.segmentInfo != null;
             if (infoStream.isEnabled("IW")) {
               infoStream.message(
@@ -5919,7 +5939,7 @@ public class IndexWriter
                   "IW", "flush: push buffered seg private updates: " + newSegment.segmentUpdates);
             }
             // now publish!
-            // 开始发布
+            // 发布Segment
             publishFlushedSegment(
                 newSegment.segmentInfo,
                 newSegment.fieldInfos,
@@ -6150,11 +6170,15 @@ public class IndexWriter
     return false;
   }
 
-  /** 将一个已经冻结的packet（FrozenBufferedUpdates，里面存储了删除（term/query类的）或者文档更新）转换成index中真实准确的docIDs，并且应用这些删除和修改操作。
+  /**
    * Translates a frozen packet of delete term/query, or doc values updates, into their actual
    * docIDs in the index, and applies the change. This is a heavy operation and is done concurrently
    * by incoming indexing threads.
-   *///这是一个比较重量级的操作，而且是通过传入的索引线程并法执行的。
+   *
+   * 将一个已经冻结的packet（FrozenBufferedUpdates，里面存储了删除（term/query类的）或者文档更新）
+   * 转换成index中真实准确的docIDs，并且应用这些删除和修改操作。
+   * 这是一个比较重量级的操作，而且是通过传入的索引线程并法执行的。
+   */
   final void forceApply(FrozenBufferedUpdates updates) throws IOException {
     updates.lock();
     try {
@@ -6173,13 +6197,18 @@ public class IndexWriter
       long totalDelCount = 0;
 
       boolean finished = false;
-      // 优化 并发性能：假设我们针对index现在所有的segments,随意的去处理删除，即使那些并发merges 也在运行。一旦我们完成，我们就检查是否有一个merge在我们运行过程中完成了，如果是，我们必须重试处理新的merged segment
+
       // Optimistic concurrency: assume we are free to resolve the deletes against all current
       // segments in the index, despite that
       // concurrent merges are running.  Once we are done, we check to see if a merge completed
       // while we were running.  If so, we must retry
       // resolving against the newly merged segment(s).  Eventually no merge finishes while we were
-      // running and we are done. 最后直到在我们运行过程中没有merge完成，我们才算真的完成。
+      // running and we are done.
+      //
+      // 优化 并发性能：假设我们针对index现在所有的segments,随意的去处理删除，即使那些并发merges 也在运行。
+      // 一旦我们完成，我们就检查是否有一个merge在我们运行过程中完成了，如果是，我们必须重试处理新的merged segment
+      // 最后直到在我们运行过程中没有merge完成，我们才算真的完成。
+
       while (true) {
         String messagePrefix;
         if (iter == 0) {
@@ -6203,8 +6232,8 @@ public class IndexWriter
 
           for (SegmentCommitInfo info : infos) {
             delFiles.addAll(info.files());
-          }
-
+          }//拿到的都是delGen之前的segments状态，后面会将bufferedUpdates应用于这些segments
+          // 在可以打开readers之前，必须在持有IW锁的同时打开，以便，例如segments不会被合并、从100% deletions中删除等？
           // Must open while holding IW lock so that e.g. segments are not merged
           // away, dropped from 100% deletions, etc., before we can open the readers
           segStates = openSegmentStates(infos, seenSegments, updates.delGen());
@@ -6241,7 +6270,7 @@ public class IndexWriter
           assert finalizer != null; // access the finalizer to prevent a warning
           // don't hold IW monitor lock here so threads are free concurrently resolve
           // deletes/updates:
-          delCount = updates.apply(segStates);
+          delCount = updates.apply(segStates);//将所有的当前代之前的segments，都应用这个updates!
           success.set(true);
         }
 
@@ -6332,7 +6361,7 @@ public class IndexWriter
     }
   }
 
-  /**
+  /** 此packet应该将其deletes应用到哪些SegmentCommitInfo，并将其返回，如果私有段已经合并，则返回null。一般来说应该都是要应用到在当前segments之前的那些segments
    * Returns the {@link SegmentCommitInfo} that this packet is supposed to apply its deletes to, or
    * null if the private segment was already merged away.
    */

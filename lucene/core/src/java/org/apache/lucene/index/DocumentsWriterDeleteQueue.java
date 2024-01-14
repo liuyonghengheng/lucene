@@ -250,11 +250,12 @@ final class DocumentsWriterDeleteQueue implements Accountable, Closeable {
     globalBufferLock.lock();
     try {
       ensureOpen();
-      /* 这里冻结global buffer 所以我们需要加锁，应用queue中的所有的deletes
-       * 并且重置global slice以便GC可以回收queue
+      /*
        * Here we freeze the global buffer so we need to lock it, apply all
        * deletes in the queue and reset the global slice to let the GC prune the
        * queue.
+       * 这里冻结global buffer 所以我们需要加锁，应用queue中的所有的deletes
+       * 并且重置global slice以便GC可以回收queue
        */
       // 暂存tail，等会更新传入的局部的callerSlice 的tail
       final Node<?> currentTail = tail;//take the current tail make this local any
@@ -274,6 +275,9 @@ final class DocumentsWriterDeleteQueue implements Accountable, Closeable {
   /**
    * This may freeze the global buffer unless the delete queue has already been closed. If the queue
    * has been closed this method will return <code>null</code>
+   * 这里会冻结 global buffer，除非delete queue已经被关闭。
+   * 如果queue已经被关闭这个方法会返回 null。
+   * 跟上面的函数差不多，只不过调用这个函数一般说明，不需要处理DWPT的局部删除。
    */
   FrozenBufferedUpdates maybeFreezeGlobalBuffer() {
     globalBufferLock.lock();
@@ -283,6 +287,8 @@ final class DocumentsWriterDeleteQueue implements Accountable, Closeable {
          * Here we freeze the global buffer so we need to lock it, apply all
          * deletes in the queue and reset the global slice to let the GC prune the
          * queue.
+         * 这里冻结global buffer 所以我们需要加锁，应用queue中的所有的deletes
+         * 并且重置global slice以便GC可以回收queue
          */
         return freezeGlobalBufferInternal(tail); // take the current tail make this local any
       } else {
@@ -304,7 +310,7 @@ final class DocumentsWriterDeleteQueue implements Accountable, Closeable {
     if (globalBufferedUpdates.any()) {
       final FrozenBufferedUpdates packet =
           new FrozenBufferedUpdates(infoStream, globalBufferedUpdates, null);
-      globalBufferedUpdates.clear();
+      globalBufferedUpdates.clear();//这里直接清空了
       return packet;
     } else {
       return null;

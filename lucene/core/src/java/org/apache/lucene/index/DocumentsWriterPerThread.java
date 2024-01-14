@@ -353,10 +353,13 @@ final class DocumentsWriterPerThread implements Accountable {
   /**
    * Prepares this DWPT for flushing. This method will freeze and return the {@link
    * DocumentsWriterDeleteQueue}s global buffer and apply all pending deletes to this DWPT.
+   * DWPT做一些刷新的准备工作，这个方法会冻结并返回DeleteQueues 全局buffer并将所有的pending deletes
+   * 应用到这个DWPT上！
    */
   FrozenBufferedUpdates prepareFlush() {
     assert numDocsInRAM > 0;
-    // 这里会对齐globalSlice deleteSlice deleteQueue 中的tail，并且应用globalSlice 中的删除，最后生成冻结的globalUpdates
+    // 这里会将globalSlice ，deleteSlice 和deleteQueue 中的tail，并且应用globalSlice 中的删除，
+    // 最后生成冻结的globalUpdates
     final FrozenBufferedUpdates globalUpdates = deleteQueue.freezeGlobalBuffer(deleteSlice);
     /* deleteSlice can possibly be null if we have hit non-aborting exceptions during indexing and never succeeded
     adding a document. */
@@ -390,14 +393,16 @@ final class DocumentsWriterPerThread implements Accountable {
     // happens when an exception is hit processing that
     // doc, eg if analyzer has some problem w/ the text):
     // 先处理delete-by-docID，这种只会在异常发生时才会生成
+    // 只需要直接修改liveDocs 对应的bit位
     if (numDeletedDocIds > 0) {
       flushState.liveDocs = new FixedBitSet(numDocsInRAM);
       flushState.liveDocs.set(0, numDocsInRAM);
       for (int i = 0; i < numDeletedDocIds; i++) {
+        // 对应的bit位设置为0
         flushState.liveDocs.clear(deleteDocIDs[i]);
       }
       flushState.delCountOnFlush = numDeletedDocIds;
-      deleteDocIDs = new int[0];
+      deleteDocIDs = new int[0];//重置
     }
 
     if (aborted) {
@@ -433,6 +438,9 @@ final class DocumentsWriterPerThread implements Accountable {
       }
       // We clear this here because we already resolved them (private to this segment) when writing
       // postings:
+      // 主要处理的删除的情况是，如果这个segments 写入的doc ，匹配上了deleteterms，则直接通过 bitmap设置成0的方式，
+      // 删除segments 内部的能匹配的数据。
+      // 我们在这里清除DeleteTerms，用为我们在写入postings时，已经处理了他们(segment 内部的删除)
       pendingUpdates.clearDeleteTerms();
       segmentInfo.setFiles(new HashSet<>(directory.getCreatedFiles()));
 
@@ -504,6 +512,7 @@ final class DocumentsWriterPerThread implements Accountable {
               flushState.liveDocs,
               flushState.delCountOnFlush,
               sortMap);
+      // 封存刷新完的新的segment的SegmentInfo 并 持久化关于删除文档的 FixedBitSet
       sealFlushedSegment(fs, sortMap, flushNotifications);
       if (infoStream.isEnabled("DWPT")) {
         infoStream.message(
@@ -556,6 +565,7 @@ final class DocumentsWriterPerThread implements Accountable {
   /**
    * Seals the {@link SegmentInfo} for the new flushed segment and persists the deleted documents
    * {@link FixedBitSet}.
+   * 封存刷新完的新的segment的SegmentInfo 并 持久化关于删除文档的 FixedBitSet
    */
   void sealFlushedSegment(
       FlushedSegment flushedSegment,

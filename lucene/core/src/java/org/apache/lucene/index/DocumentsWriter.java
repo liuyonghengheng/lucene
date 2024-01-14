@@ -89,7 +89,8 @@ final class DocumentsWriter implements Closeable, Accountable {
 
   private final LiveIndexWriterConfig config;
 
-  private final AtomicInteger numDocsInRAM = new AtomicInteger(0);// 记录内存中的doc数量，写入会增加，flush会减少
+  // 记录内存中的doc数量，写入会增加，flush会减少
+  private final AtomicInteger numDocsInRAM = new AtomicInteger(0);
 
   // TODO: cut over to BytesRefHash in BufferedDeletes
   volatile DocumentsWriterDeleteQueue deleteQueue;
@@ -98,7 +99,8 @@ final class DocumentsWriter implements Closeable, Accountable {
    * we preserve changes during a full flush since IW might not checkout before
    * we release all changes. NRT Readers otherwise suddenly return true from
    * isCurrent while there are actually changes currently committed. See also
-   * #anyChanges() & #flushAllThreads 除此之外，近实时Readers会从isCurrent方法中突然返回true,如果现在changes确实已经提交了。
+   * #anyChanges() & #flushAllThreads 除此之外，近实时Readers会从isCurrent方法中突然返回true,
+   * 如果现在changes确实已经提交了。
    */ //也可以看一下 anyChanges() flushAllThreads 这俩方法。
   private volatile boolean pendingChangesInCurrentFullFlush;
 
@@ -336,12 +338,15 @@ final class DocumentsWriter implements Closeable, Accountable {
   }
 
   boolean anyChanges() {
-    /* 修改可能在DWPT中或者在删除队列中。
+    /*
      * changes are either in a DWPT or in the deleteQueue.
-     * yet if we currently flush deletes and / or dwpt there 如果我们此时 flush  deletes或者DWPT，
-     * could be a window where all changes are in the ticket queue  那么在将所有更改发布到IW之前，
-     * before they are published to the IW. ie we need to check if the 可能会有一个窗口，其中所有更改都在ticket队列中。
-     * ticket queue has any tickets. 我们需要检查ticket queue 是否为空。
+     * yet if we currently flush deletes and / or dwpt there
+     * could be a window where all changes are in the ticket queue
+     * before they are published to the IW. ie we need to check if the
+     * ticket queue has any tickets.
+     * 修改可能在DWPT中或者在删除队列中。如果我们此时正在flush deletes或者DWPT，可能会有个
+     * 窗口期，在这段时间内，在将所有更改发布到IW之前，其中所有更改都在ticket队列中，
+     * 即我们需要检查ticket queue 是否为空
      */
     boolean anyChanges =
         numDocsInRAM.get() != 0  //DWPT
@@ -385,16 +390,20 @@ final class DocumentsWriter implements Closeable, Accountable {
   private boolean preUpdate() throws IOException {
     ensureOpen();
     boolean hasEvents = false;
+    //判断条件是 有任何的stalled状态的线程，或者 需要flush的DWPT数量大于0 并且 设置了这个参数
+    // 这个时候说明写入太快了，刷新处理太慢了，要先把pending状态的flush 执行刷新
+    // 如果依然是stalled状态，那么将此线程阻塞1s，先不往下进行
     while (flushControl.anyStalledThreads()
         || (flushControl.numQueuedFlushes() > 0 && config.checkPendingFlushOnUpdate)) {
       // Help out flushing any queued DWPTs so we can un-stall:
       // Try pick up pending threads here if possible
       DocumentsWriterPerThread flushingDWPT;
+      //先把Pending状态的DWPT执行flush！
       while ((flushingDWPT = flushControl.nextPendingFlush()) != null) {
         // Don't push the delete here since the update could fail!
         hasEvents |= doFlush(flushingDWPT);
       }
-      flushControl.waitIfStalled(); // block if stalled
+      flushControl.waitIfStalled(); // block if stalled，如果被设置成了stalled，则在这里被阻塞
     }
     return hasEvents;
   }
@@ -419,7 +428,9 @@ final class DocumentsWriter implements Closeable, Accountable {
       final DocumentsWriterDeleteQueue.Node<?> delNode)
       throws IOException {
     boolean hasEvents = preUpdate();
+    //资源不足的情况下，会先进行PendingFlush的DWPT刷新操作，等待其释放足够的资源
 
+    //从优先队列获取最近使用过的DWPT，并锁定dwpt
     final DocumentsWriterPerThread dwpt = flushControl.obtainAndLock();
     final DocumentsWriterPerThread flushingDWPT;
     long seqNo;
@@ -427,6 +438,8 @@ final class DocumentsWriter implements Closeable, Accountable {
     try {
       // This must happen after we've pulled the DWPT because IW.close
       // waits for all DWPT to be released:
+      // 当我们获取到DWPT之后，必须执行这个检查，因为IW.close会等待所有的DWPT被释放
+      // 如果检查到设置了close，则抛出异常，后面将DWPT释放掉
       ensureOpen();
       try {
         seqNo =
@@ -439,13 +452,14 @@ final class DocumentsWriter implements Closeable, Accountable {
       flushingDWPT = flushControl.doAfterDocument(dwpt);
     } finally {
       if (dwpt.isFlushPending() || dwpt.isAborted()) {
-        dwpt.unlock();
+        dwpt.unlock();//如果是FlushPending或者Aborted状态，将不会再放回队列
       } else {
-        perThreadPool.marksAsFreeAndUnlock(dwpt);
+        perThreadPool.marksAsFreeAndUnlock(dwpt);//释放dwpt，放回优先队列
       }
       assert dwpt.isHeldByCurrentThread() == false : "we didn't release the dwpt even on abort";
     }
-
+    // 如果flushingDWPT不是null，说明时pending flush 状态，并且已经检出
+    // 那么这里会刷新他！
     if (postUpdate(flushingDWPT, hasEvents)) {
       seqNo = -seqNo;
     }
@@ -481,20 +495,44 @@ final class DocumentsWriter implements Closeable, Accountable {
          * started. if 'B' finishes before 'A' we need to wait until 'A' is done
          * otherwise the deletes frozen by 'B' are not applied to 'A' and we
          * might miss to deletes documents in 'A'.
+         *
+         * 因为 DWPT flush 处理是并发执行的，并且多个DWPT也可能同时flush，我们必须保持flush的顺序，
+         * 在我们可以使用刷新完的segment以及frozen global deletes 还在缓冲区中 之前。
+         * 原因是global deletes标记了某个时间点，在该时间点，我们将DWPT从轮询的DWPTpool中移除
+         * 并冻结global deletes。
+         * 例如：
+         * A 刷新 ‘A’ 开始了，并且冻结了global deletes，此时刷新‘B’开始，并且冻结了从‘A’开始以来的
+         * 所有的deletes。如果‘B’ 在‘A’之前finishes，我们需要等待直到‘A’完成done，否则的话被‘B’冻结
+         * 的deletes 将不会被应用到‘A’上，并且我们会错失在‘A’上删除文档。(为什么‘B’冻结的deletes 要应
+         * 用到‘A’上？因为对于全局删除，需要应用到所有的已经生成的segments之上，因为前面的任何segments都
+         * 可能与需要删除的数据有交集！所以需要保证顺序的生成segments和应用全局deletes！ticket的作用就是
+         * 保证顺序)
          */
         try {
           assert assertTicketQueueModification(flushingDWPT.deleteQueue);
           // Each flush is assigned a ticket in the order they acquire the ticketQueue lock
+          // 每个flush都会被分配一个ticket，按照他们获取到ticketQueue lock的顺序
+          // addFlushTicket 这个方法时同步的，因此是获取ticketQueue monitor 锁，
+          // 后续会根据 ticketQueue 的顺序获取segments，并执行删除。
+          // 此方法会冻结全局的buffer，不会影响其他DWPT吗？理论上是不会的，因为dwpt内部
+          // 会同步与其相关的deleteQueue的切片，与其相关的删除数据一定不会丢失，不管是
+          // 局部删除还是全局删除，也会存储到局部的updatesbuffer。
           ticket = ticketQueue.addFlushTicket(flushingDWPT);
           final int flushingDocsInRam = flushingDWPT.getNumDocsInRAM();
           boolean dwptSuccess = false;
           try {
             // flush concurrently without locking
+            // 并发刷新，不上锁
+            // 这个DWPT在之前就被checkout出来了，现在是不会被分配的
+            // 执行flush 是不需要上锁，因为这里是在将 pending docs 刷新到新的segments中，不会相互影响
             final FlushedSegment newSegment = flushingDWPT.flush(flushNotifications);
-            ticketQueue.addSegment(ticket, newSegment);//将ticket和对应的newSegment 添加到ticketQueue
+            //将newSegment添加到对应的ticket中，等待后续处理
+            //实际的刷新是异步完成的，一旦完成，FlushedSegment就会传递给刷新票证
+            ticketQueue.addSegment(ticket, newSegment);
             dwptSuccess = true;
           } finally {
             subtractFlushedNumDocs(flushingDocsInRam);
+            // 将没用的文件删除
             if (flushingDWPT.pendingFilesToDelete().isEmpty() == false) {
               Set<String> files = flushingDWPT.pendingFilesToDelete();
               flushNotifications.deleteUnusedFiles(files);
@@ -507,6 +545,7 @@ final class DocumentsWriter implements Closeable, Accountable {
           }
           // flush was successful once we reached this point - new seg. has been assigned to the
           // ticket!
+          // 到这里，说明刷新成功了。新的seg也已经被分配到了ticket中。
           success = true;
         } finally {
           if (!success && ticket != null) {
@@ -519,22 +558,29 @@ final class DocumentsWriter implements Closeable, Accountable {
         /*
          * Now we are done and try to flush the ticket queue if the head of the
          * queue has already finished the flush.
+         *
          */
         if (ticketQueue.getTicketCount() >= perThreadPool.size()) {
           // This means there is a backlog: the one
           // thread in innerPurge can't keep up with all
           // other threads flushing segments.  In this case
           // we forcefully stall the producers.
+          // 如果现在积压的刷新segments数量比DWPT数量多，说明发生积压了，
+          // innerPurge中的一个线程无法跟上所有其他线程刷新段。
+          // 此时我们必须强制停止生产者，参考 IW flushNotifications 具体实现
           flushNotifications.onTicketBacklog();
           break;
         }
       } finally {
+        // 刷新完之后将DWPT从flushingWriters删除
         flushControl.doAfterFlush(flushingDWPT);
       }
-
+      // 继续获取下一个PendingFlush状态的DWPT，进行刷新
       flushingDWPT = flushControl.nextPendingFlush();
     }
-
+    // PendingFlush 的DWPT都已经被刷新完成
+    // 如果有事件，会直接处理
+    // 参考 IW flushNotifications 具体实现
     if (hasEvents) {
       flushNotifications.afterSegmentsFlushed();
     }
@@ -570,8 +616,8 @@ final class DocumentsWriter implements Closeable, Accountable {
   }
 
   synchronized void resetDeleteQueue(DocumentsWriterDeleteQueue newQueue) {
-    assert deleteQueue.isAdvanced();
-    assert newQueue.isAdvanced() == false;
+    assert deleteQueue.isAdvanced();//deleteQueue已经被advance
+    assert newQueue.isAdvanced() == false;//newQueue没有被advance
     // 确保 sepno 正确
     assert deleteQueue.getLastSequenceNumber() <= newQueue.getLastSequenceNumber();
     assert deleteQueue.getMaxSeqNo() <= newQueue.getLastSequenceNumber()
@@ -641,11 +687,13 @@ final class DocumentsWriter implements Closeable, Accountable {
     return true;
   }
 
-  /* flushAllThreads 通过 fullFlushLock 进行同步操作，刷新所有的线程是一个两阶段的操作，
+  /*
    * FlushAllThreads is synced by IW fullFlushLock. Flushing all threads is a
    * two stage operation; the caller must ensure (in try/finally) that finishFlush
    * is called after this method, to release the flush lock in DWFlushControl
-   */// 调用者必须保证在调用完这个方法之后要调用finishFlush方法，从而释放锁
+   * flushAllThreads 通过 IW 的 fullFlushLock 进行同步。刷新所有的线程是一个两阶段的操作，
+   * 调用者必须保证在调用完这个方法之后要调用finishFlush方法，从而释放DWFlushControl中的锁
+   */
   long flushAllThreads() throws IOException {
     final DocumentsWriterDeleteQueue flushingDeleteQueue;
     if (infoStream.isEnabled("DW")) {
@@ -653,29 +701,37 @@ final class DocumentsWriter implements Closeable, Accountable {
     }
 
     long seqNo;
+    // 同步 防止当前获取到的anyChanges，deleteQueue，seqNo有误
+    // 因为这个过程deleteQueue在切换，seqNo也在变！如果并发执行可能会获取到错误的结果
     synchronized (this) {
+      // 当前的DWPTs中或者deleteQueue中或者ticketQueue中是否有数据
       pendingChangesInCurrentFullFlush = anyChanges();
       flushingDeleteQueue = deleteQueue;
       /* Cutover to a new delete queue.  This must be synced on the flush control
        * otherwise a new DWPT could sneak into the loop with an already flushing
        * delete queue
-       * 切换到新的删除队列。这必须在flush control上同步执行，否则新的DWPT可能会偷偷进入已经在刷新的删除队列的循环
+       * 标记full flush，并切换到新的删除队列，'切换'这个操作必须在flushControl上同步执行，
+       * 否则新的DWPT可能会偷偷进入包含已经在刷新中的删除队列的循环。
+       * 然后把 DWPT 从perThreadPool检出，标记为pendingFlush并放入 flushQueue 中
+       * (详细同步步骤在markForFullFlush函数中)
        *  */
       seqNo = flushControl.markForFullFlush(); // swaps this.deleteQueue synced on FlushControl
       assert setFlushingDeleteQueue(flushingDeleteQueue);
     }
     assert currentFullFlushDelQueue != null;
-    assert currentFullFlushDelQueue != deleteQueue;
-
+    assert currentFullFlushDelQueue != deleteQueue;// assert 是否切换成功
+    // 上面已经把准备工作都做好了，下面就开始执行DWPT的刷新了
     boolean anythingFlushed = false;
     try {
       DocumentsWriterPerThread flushingDWPT;
       // Help out with flushing:
+      // 循环获取PendingFlush的DWPT，doFlush中也有相同的逻辑
       while ((flushingDWPT = flushControl.nextPendingFlush()) != null) {
         anythingFlushed |= doFlush(flushingDWPT);
       }
       // If a concurrent flush is still in flight wait for it
-      flushControl.waitForFlush();
+      // 如果有并发的flush 依然在执行，需要等待他完成
+      flushControl.waitForFlush();//通过判断 flushingWriters 是否为空
       if (anythingFlushed == false
           && flushingDeleteQueue.anyChanges()) { // apply deletes if we did not flush any document
         if (infoStream.isEnabled("DW")) {
@@ -683,14 +739,16 @@ final class DocumentsWriter implements Closeable, Accountable {
               "DW", Thread.currentThread().getName() + ": flush naked frozen global deletes");
         }
         assert assertTicketQueueModification(flushingDeleteQueue);
+        // 如果只有删除，则将flushingDeleteQueue放入ticketQueue，等待 publishFlushedSegments 会处理
         ticketQueue.addDeletes(flushingDeleteQueue);
       }
-      // we can't assert that we don't have any tickets in teh queue since we might add a
+      // we can't assert that we don't have any tickets in the queue since we might add a
       // DocumentsWriterDeleteQueue
       // concurrently if we have very small ram buffers this happens quite frequently
       assert !flushingDeleteQueue.anyChanges();
     } finally {
       assert flushingDeleteQueue == currentFullFlushDelQueue;
+      // 所有的DWPT都已经被处理，并且这个队列也被完全刷新到ticket-queue中了
       flushingDeleteQueue
           .close(); // all DWPT have been processed and this queue has been fully flushed to the
       // ticket-queue

@@ -32,6 +32,12 @@ import org.apache.lucene.util.ThreadInterruptedException;
  * DocumentsWriterPerThreadPool} is exceeded. Once flushing catches up and the number of flushing
  * DWPT is equal or lower than the number of active {@link DocumentsWriterPerThread}s threads are
  * released and can continue indexing.
+ *
+ * 控制DocumentsWriter会话的运行健康状况。如果刷新速度明显慢于索引速度，则此类用于阻塞传入的索引线程，
+ * 以确保DocumentsWriters的健康。如果刷新速度明显慢于索引，则IndexWriter会话中使用的净内存会迅速增加，
+ * 并且很容易超过JVM的可用内存。
+ *
+ * 为了防止OOM错误并确保IndexWriter的稳定性，一旦超过DocumentsWriterPerThreadPool中可用DocumentsWriter PerThreads的2倍数量，此类就会阻止传入线程进行索引。一旦刷新赶上并且刷新DWPT的数量等于或低于活动DocumentsWriterPerThreads的数量，就会释放线程并可以继续索引。
  */
 final class DocumentsWriterStallControl {
 
@@ -46,14 +52,17 @@ final class DocumentsWriterStallControl {
    * {@link DocumentsWriterPerThread}. Otherwise it will reset the {@link
    * DocumentsWriterStallControl} to healthy and release all threads waiting on {@link
    * #waitIfStalled()}
+   * 更新stalled标志状态。如果正在刷新的DWPT数量比活跃的DWPT数量大，这个方法会设置stalled标志为true。否则 他会重置
+   * DocumentsWriterStallControl 到健康状态，并释放所有的因为waitIfStalled()而进入waiting状态的线程。
    */
   synchronized void updateStalled(boolean stalled) {
-    if (this.stalled != stalled) {
-      this.stalled = stalled;
+    if (this.stalled != stalled) {//状态变了就更新
+      this.stalled = stalled;//设置
       if (stalled) {
         wasStalled = true;
       }
-      notifyAll();//唤醒所有的被阻塞的线程
+      notifyAll();//通知所有的被stallControl阻塞的线程，为什么只要状态变换，不管是true还是false 都会执行？
+      // 是不是true的情况下，即便通知了，后续还是会被阻塞？
     }
   }
 
@@ -63,11 +72,14 @@ final class DocumentsWriterStallControl {
       synchronized (this) {
         if (stalled) { // react on the first wakeup call!
           // don't loop here, higher level logic will re-stall!
+          // 不要在这里循环，外层的逻辑会re-stall
           try {
             incWaiters();
             // Defensive, in case we have a concurrency bug that fails to .notify/All our thread:
             // just wait for up to 1 second here, and let caller re-stall if it's still needed:
-            wait(1000);
+            // 防御，有一个并发bug， 导致执行notice/All线程失败：
+            //只需在此处等待1秒，如果仍然需要，请让调用者re-stall：
+            wait(1000);//每次block 1s
             decrWaiters();
           } catch (InterruptedException e) {
             throw new ThreadInterruptedException(e);

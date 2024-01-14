@@ -2421,6 +2421,11 @@ public class TestIndexWriter extends LuceneTestCase {
 
     w.deleteDocuments(new Term("del", "foo"));
 
+    doc = new Document();
+    doc.add(new TextField("add", "foo", Field.Store.YES));
+    w.addDocument(doc);
+
+
     w.flush();
 
     doc.add(new TextField("a", "foo", Field.Store.YES));
@@ -2445,6 +2450,11 @@ public class TestIndexWriter extends LuceneTestCase {
     w.addDocument(doc);
 
     w.commit();
+
+    doc = new Document();
+    doc.add(new TextField("foo", "bar", Field.Store.YES));
+    doc.add(new TextField("c", "bar1", Field.Store.YES));
+    w.addDocument(doc);
 
     doc = new Document();
     doc.add(new TextField("foo", "bar2", Field.Store.YES));

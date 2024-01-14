@@ -85,7 +85,7 @@ final class DocumentsWriterPerThreadPool implements Iterable<DocumentsWriterPerT
    */
   private synchronized DocumentsWriterPerThread newWriter() {
     assert takenWriterPermits >= 0;
-    while (takenWriterPermits > 0) {
+    while (takenWriterPermits > 0) {// 当takenWriterPermits>0 ,创建新的DWPT会被阻塞
       // we can't create new DWPTs while not all permits are available
       try {
         wait();
@@ -101,8 +101,8 @@ final class DocumentsWriterPerThreadPool implements Iterable<DocumentsWriterPerT
     // pool is closed
     ensureOpen();
     DocumentsWriterPerThread dwpt = dwptFactory.get();
-    dwpt.lock(); // lock so nobody else will get this DWPT
-    dwpts.add(dwpt);
+    dwpt.lock(); // lock so nobody else will get this DWPT，锁定
+    dwpts.add(dwpt); // 添加到dwpts中
     return dwpt;
   }
 
@@ -116,7 +116,8 @@ final class DocumentsWriterPerThreadPool implements Iterable<DocumentsWriterPerT
    */
   DocumentsWriterPerThread getAndLock() {
     ensureOpen();
-    DocumentsWriterPerThread dwpt = freeList.poll(DocumentsWriterPerThread::tryLock);
+    // freeList 本是是支持并发的，并且会锁定获取到的DWPT
+    DocumentsWriterPerThread dwpt = freeList.poll(DocumentsWriterPerThread::tryLock);//从优先队列中拿最近使用的dwpt
     if (dwpt != null) {
       return dwpt;
     }
@@ -124,6 +125,7 @@ final class DocumentsWriterPerThreadPool implements Iterable<DocumentsWriterPerT
     // `freeList` at this point, it will be added later on once DocumentsWriter has indexed a
     // document into this DWPT and then gives it back to the pool by calling
     // #marksAsFreeAndUnlock.
+    // 新的 DWPT生成会先放入dwpts中,但是只有使用完成之后才会放到 perThreadPool.freeList 中。
     return newWriter();
   }
 
@@ -141,7 +143,7 @@ final class DocumentsWriterPerThreadPool implements Iterable<DocumentsWriterPerT
     final long ramBytesUsed = state.ramBytesUsed();
     assert contains(state)
         : "we tried to add a DWPT back to the pool but the pool doesn't know about this DWPT";
-    freeList.add(state, ramBytesUsed);
+    freeList.add(state, ramBytesUsed);// 用完之后添加到freeList优先队列中
     state.unlock();
   }
 
@@ -179,7 +181,7 @@ final class DocumentsWriterPerThreadPool implements Iterable<DocumentsWriterPerT
    *
    * @return <code>true</code> iff the given DWPT has been removed. Otherwise <code>false</code>
    */
-  synchronized boolean checkout(DocumentsWriterPerThread perThread) {
+  synchronized boolean checkout(DocumentsWriterPerThread perThread) {// 同步，保证freeList的一致性！
     // The DWPT must be held by the current thread. This guarantees that concurrent calls to
     // #getAndLock cannot pull this DWPT out of the pool since #getAndLock does a DWPT#tryLock to
     // check if the DWPT is available.

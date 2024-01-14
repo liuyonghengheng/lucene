@@ -44,6 +44,14 @@ import org.apache.lucene.util.InfoStream;
  *
  * <p>Each packet is assigned a generation, and each flushed or merged segment is also assigned a
  * generation, so we can track which BufferedDeletes packets to apply to any given segment.
+ *
+ * 追踪FrozenBufferedUpdates流。当DWPT刷新时，他缓存的delets和updates 会被追加到这流上，并且紧接着就会被处理
+ * (到确定的docIDs，每个segment都会处理)，使用触发并发flush的indexing 线程。当一个merge开始执行，我们通过同步
+ * 保证所有的正在处理的packets可以完成。我们也会应用到所有的segments，当NRT reader被获取，commit/close 方法
+ * 被调用，或者当太多的deletes和updates被缓存而必须被刷新时(by RAM usage or by count).
+ *
+ * 每一个ticket都会被分配一个代gen，并且每一个被刷新或者被merge的segment也会被分配一个代，所以我们可以追踪到
+ * 要应用于任何给定段的BufferedDeletes数据包。
  */
 final class BufferedUpdatesStream implements Accountable {
 
@@ -73,17 +81,17 @@ final class BufferedUpdatesStream implements Accountable {
      * With DWPT this is possible if two or more flushes are racing for pushing
      * updates. If the pushed packets get our of order would loose documents
      * since deletes are applied to the wrong segments.
-     * 这个插入操作必须是原子的，如果我们让线程增加gen，然后推送数据包，我们就有数据包出错/乱序的风险。
-     * 有了DWPT，如果两次或两次以上的flushes正在竞相推送updates，这是可能的。如果被推送的包出错将会丢失
+     * 这个插入操作必须是原子的，如果我们让线程增加gen代，然后push packet，我们就有packets出错/乱序的风险。
+     * 有多个DWPT，两个或两个以上的flushes正在竞相push updates，这是可能的。如果被push的packets出错将会丢失
      * docs 因为deletes 被应用到了错误的segments。
      */
-    packet.setDelGen(nextGen++);
+    packet.setDelGen(nextGen++);//设置代，这里的代都是由BufferedUpdatesStream管理
     assert packet.any();
     assert checkDeleteStats();
 
-    updates.add(packet);
-    numTerms.addAndGet(packet.numTermDeletes);
-    bytesUsed.addAndGet(packet.bytesUsed);
+    updates.add(packet);//添加到updates set中
+    numTerms.addAndGet(packet.numTermDeletes);//累加term删除数量
+    bytesUsed.addAndGet(packet.bytesUsed);//累加内存使用量
     if (infoStream.isEnabled("BD")) {
       infoStream.message(
           "BD",
@@ -330,15 +338,19 @@ final class BufferedUpdatesStream implements Accountable {
    * Tracks the contiguous range of packets that have finished resolving. We need this because the
    * packets are concurrently resolved, and we can only write to disk the contiguous completed
    * packets.
+   * 跟踪已完成解析的数据包的连续范围。我们需要这样做，因为数据包是并发解析的，并且我们只能将连续完成的数据包写入磁盘。
    */
   private static class FinishedSegments {
 
-    /** Largest del gen, inclusive, for which all prior packets have finished applying. */
+    /** Largest del gen, inclusive, for which all prior packets have finished applying.
+     * 最大的删除代，包括他之前的所有数据包都已完成应用。
+     * */
     private long completedDelGen;
 
     /**
      * This lets us track the "holes" in the current frontier of applying del gens; once the holes
      * are filled in we can advance completedDelGen.
+     * 这让我们能够追踪当前应用删除代的前部中的“漏洞”；一旦洞被填满，我们就可以推进completedDelGen。
      */
     private final Set<Long> finishedDelGens = new HashSet<>();
 
@@ -363,6 +375,7 @@ final class BufferedUpdatesStream implements Accountable {
 
     synchronized void finishedSegment(long delGen) {
       finishedDelGens.add(delGen);
+      // 在他代比这个大的已经完成的都可以从finishedDelGens删除
       while (true) {
         if (finishedDelGens.contains(completedDelGen + 1)) {
           finishedDelGens.remove(completedDelGen + 1);
