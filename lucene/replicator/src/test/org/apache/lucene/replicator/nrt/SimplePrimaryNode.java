@@ -439,7 +439,11 @@ class SimplePrimaryNode extends PrimaryNode {
       byte[] buffer = new byte[16384];
       int fileCount = 0;
       long totBytesSent = 0;
+      // 一直等待，直到所有的文件都被复制完成
       while (true) {
+        // 从socket 接收一个字节
+        // 返回1 说明所有的文件都处理完成
+        // 副本每次发送一个文件请求都会先发送一个字节，代表是否完成
         byte done = destIn.readByte();
         if (done == 1) {
           break;
@@ -448,17 +452,21 @@ class SimplePrimaryNode extends PrimaryNode {
         }
 
         // Name of the file the replica wants us to send:
+        // 从socket 获取目标文件
         String fileName = destIn.readString();
 
         // Starting offset in the file we should start sending bytes from:
+        // 文件偏移量，从这个偏移量开始复制
         long fpStart = destIn.readVLong();
-
+        // 打开文件并读取数据
         try (IndexInput in = dir.openInput(fileName, IOContext.DEFAULT)) {
           long len = in.length();
           // message("fetch " + fileName + ": send len=" + len);
           destOut.writeVLong(len);
+          // 调整偏移量
           in.seek(fpStart);
           long upto = fpStart;
+          // 从偏移量开始读，一直到文件尾部
           while (upto < len) {
             int chunk = (int) Math.min(buffer.length, (len - upto));
             in.readBytes(buffer, 0, chunk);
@@ -477,6 +485,7 @@ class SimplePrimaryNode extends PrimaryNode {
                 buffer[x] ^= 1 << bit;
               }
             }
+            // 写数据到out
             destOut.writeBytes(buffer, 0, chunk);
             upto += chunk;
             totBytesSent += chunk;
@@ -496,6 +505,7 @@ class SimplePrimaryNode extends PrimaryNode {
               + " bytes");
     } catch (Throwable t) {
       message("top: exception during fetch: " + t.getMessage() + "; now close socket");
+      // 异常关闭socket
       socket.close();
       return false;
     } finally {
