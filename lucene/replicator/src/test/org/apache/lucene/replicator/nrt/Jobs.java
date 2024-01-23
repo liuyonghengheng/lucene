@@ -48,7 +48,7 @@ class Jobs extends Thread implements Closeable {
         return null;
       } else if (queue.isEmpty()) {
         try {
-          wait();
+          wait();//阻塞
         } catch (InterruptedException ie) {
           throw new RuntimeException(ie);
         }
@@ -135,6 +135,7 @@ class Jobs extends Thread implements Closeable {
     }
   }
 
+  // 放入优先队列，统一管理
   public synchronized void launch(CopyJob job) {
     if (finish == false) {
       queue.offer(job);
@@ -144,7 +145,9 @@ class Jobs extends Thread implements Closeable {
     }
   }
 
-  /** Cancels any existing jobs that are copying the same file names as this one */
+  /** Cancels any existing jobs that are copying the same file names as this one
+   * queue中任何和给定的job有重叠的文件的 job，都会被取消！
+   * */
   public synchronized void cancelConflictingJobs(CopyJob newJob) throws IOException {
     for (CopyJob job : queue) {
       if (job.conflicts(newJob)) {

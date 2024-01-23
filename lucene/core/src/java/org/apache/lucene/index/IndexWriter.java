@@ -4051,7 +4051,7 @@ public class IndexWriter
   /**
    * Sets the commit user data iterator, controlling whether to advance the {@link
    * SegmentInfos#getVersion}.
-   *
+   * 设置 提交用户数据的遍历器，控制是否推进 {@link SegmentInfos#getVersion}
    * @see #setLiveCommitData(Iterable)
    * @lucene.internal
    */

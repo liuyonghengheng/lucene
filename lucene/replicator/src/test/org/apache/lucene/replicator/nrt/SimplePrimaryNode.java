@@ -68,24 +68,28 @@ import org.apache.lucene.tests.util.TestUtil;
 import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.ThreadInterruptedException;
 
-/** A primary node that uses simple TCP connections to send commands and copy files */
+/** A primary node that uses simple TCP connections to send commands and copy files
+ * SimplePrimaryNode使用tcp连接进行文件copy和命令发送
+ * */
 class SimplePrimaryNode extends PrimaryNode {
-// SimplePrimaryNode使用tcp连接进行文件copy和命令发送
+  // 当前Node的tcp port
   final int tcpPort;
 
   final Random random;
 
+  // replica信息，连接信息
   // These are updated by parent test process whenever replicas change:
   int[] replicaTCPPorts = new int[0];
   int[] replicaIDs = new int[0];
 
+  //
   // So we only flip a bit once per file name:
   final Set<String> bitFlipped = Collections.synchronizedSet(new HashSet<>());
-
+  // 预热中的Segments
   final List<MergePreCopy> warmingSegments = Collections.synchronizedList(new ArrayList<>());
-
+  //
   final boolean doFlipBitsDuringCopy;
-
+  // merge 之后的文件，数据结构，复制状态
   static class MergePreCopy {
     final List<Connection> connections = Collections.synchronizedList(new ArrayList<>());
     final Map<String, FileMetaData> files;
@@ -328,7 +332,9 @@ class SimplePrimaryNode extends PrimaryNode {
     }
   }
 
-  /** Flushes all indexing ops to disk and notifies all replicas that they should now copy */
+  /** Flushes all indexing ops to disk and notifies all replicas that they should now copy
+   * 处理 Flush 命令。县flush，然后通知所有的replicas 现在可以copy了
+   * */
   private void handleFlush(DataInput topIn, DataOutput topOut, BufferedOutputStream bos)
       throws IOException {
     Thread.currentThread().setName("flush");

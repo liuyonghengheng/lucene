@@ -57,7 +57,7 @@ import org.apache.lucene.util.Version;
 /**
  * Replica node, that pulls index changes from the primary node by copying newly flushed or merged
  * index files.
- *
+ * ReplicaNode 代表一个index主副本，从primary中拉取修改的数据，拉取最新刷新生成的或者最新merged生成的index files。
  * @lucene.experimental
  */
 public abstract class ReplicaNode extends Node {
@@ -67,22 +67,33 @@ public abstract class ReplicaNode extends Node {
   /** IncRef'd files in the current commit point: */
   private final Collection<String> lastCommitFiles = new HashSet<>();
 
-  /** IncRef'd files in the current NRT point: */
+  /** IncRef'd files in the current NRT point:
+   * 当前的NRT point 中的文件
+   * */
   protected final Collection<String> lastNRTFiles = new HashSet<>();
 
-  /** Currently running merge pre-copy jobs */
+  /** Currently running merge pre-copy jobs
+   * 现在正在运行的 merge相关的 预拷贝任务。
+   * */
   protected final Set<CopyJob> mergeCopyJobs = Collections.synchronizedSet(new HashSet<>());
 
-  /** Non-null when we are currently copying files from a new NRT point: */
+  /** Non-null when we are currently copying files from a new NRT point:
+   * 当我们正在从一个新的NRT point 拷贝文件时，这个值不为空
+   * 当前正在执行拷贝的任务
+   * */
   protected CopyJob curNRTCopy;
 
   /** We hold this to ensure an external IndexWriter cannot also open on our directory: */
   private final Lock writeFileLock;
 
-  /** Merged segment files that we pre-copied, but have not yet made visible in a new NRT point. */
+  /** Merged segment files that we pre-copied, but have not yet made visible in a new NRT point.
+   * merge完的segment files ，我们已经预拷贝完了，但是还不可见
+   * */
   final Set<String> pendingMergeFiles = Collections.synchronizedSet(new HashSet<String>());
 
-  /** Primary gen last time we successfully replicated: */
+  /** Primary gen last time we successfully replicated:
+   * 最新的PrimaryGen
+   * */
   protected long lastPrimaryGen;
 
   public ReplicaNode(
@@ -121,6 +132,7 @@ public abstract class ReplicaNode extends Node {
   /**
    * Start up this replica, which possibly requires heavy copying of files from the primary node, if
    * we were down for a long time
+   * 启动这个replica，这可能会需要重量级的文件拷贝，如果很长时间没有启动了！
    */
   protected synchronized void start(long curPrimaryGen) throws IOException {
 
@@ -509,6 +521,11 @@ public abstract class ReplicaNode extends Node {
    * files is null then the latest copy state should be copied. If prevJob is not null, then the new
    * copy job is replacing it and should 1) cancel the previous one, and 2) optionally salvage e.g.
    * partially copied and, shared with the new copy job, files.
+   *
+   * 开始一个 后台拷贝任务，从primary nod 拷贝具体的文件。如果文件是空，那么最新的copy state 应该是被拷贝完了。
+   * 如果之前的job不为空，那么这个最新的拷贝任务会替代这个老的任务，并且应该 1）取消之前的一个任务  2）选择性抢救
+   * 例如，部分复制，并与新的复制作业共享文件。
+   * 难道不应该先把老的复制完吗？如果每一个job 在复制过程中都被后来的job替代，有可能会导致副本一直都没有可读的数据！
    */
   protected abstract CopyJob newCopyJob(
       String reason,
@@ -518,12 +535,16 @@ public abstract class ReplicaNode extends Node {
       CopyJob.OnceDone onceDone)
       throws IOException;
 
-  /** Runs this job async'd */
+  /** Runs this job async'd
+   * 异步执行这个job！
+   * */
   protected abstract void launch(CopyJob job);
 
   /**
    * Tell primary we (replica) just started, so primary can tell us to warm any already warming
    * merges. This lets us keep low nrt refresh time for the first nrt sync after we started.
+   * 告诉primary，这个replica刚启动，所以primary 可以告诉我们去预热任何已经准备好预热的merge。
+   * 对于我们刚启动之后的第一次nrt同步来说，这会让我们保持较低的nrt refresh 耗时。
    */
   protected abstract void sendNewReplica() throws IOException;
 
@@ -531,6 +552,10 @@ public abstract class ReplicaNode extends Node {
    * Call this to notify this replica node that a new NRT infos is available on the primary. We kick
    * off a job (runs in the background) to copy files across, and open a new reader once that's
    * done.
+   * 当收到primary node 发送过来的 CMD_NEW_NRT_POINT 命令，通知这个replica节点，一个新的NRT infos在primary已经可用了
+   * 会调用这个函数 来处理相应的请求，根据请求数据判断是否需要拷贝。
+   * 调用这个方法，来通知这个replica节点，一个新的NRT infos在primary已经可用了，也就是生成之后可以被拷贝了。
+   * 我们会启动一个job（后台运行）来拷贝文件，并且一旦这个job运行完就打开一个新的reader。
    */
   public synchronized CopyJob newNRTPoint(long newPrimaryGen, long version) throws IOException {
 
@@ -547,6 +572,14 @@ public abstract class ReplicaNode extends Node {
     // merged segments, it's still a bit risky to rely solely on checksum/file length to catch the
     // difference, so we defensively discard
     // here and re-copy in that case:
+    /**
+     * 首先切换到新的primary（如果可能），因此我们会先丢弃任何 预拷贝的primary merge好的segments，在检查哪些files
+     * 需要拷贝之前。虽然这些预拷贝的merged segments可能仍然对我们有用，在这种情况下：这个新的primary同一个primary
+     * （例如 重启，虽然gen 变了，但是还是同一个primary），或者一个replica被提升为primary，它有一个更加新的NRT point
+     * 相比于我们之前正在做的包含预拷贝的segments。
+     * 仅仅依靠校验和/文件长度来获取差异仍然有点风险，所以我们在这里进行防御丢弃，并在这种情况下重新复制：
+     * 风险点到底是啥？
+     * */
     maybeNewPrimary(newPrimaryGen);
 
     // Caller should not "publish" us until we have finished .start():
@@ -556,16 +589,17 @@ public abstract class ReplicaNode extends Node {
       state = "syncing";
     }
 
+    // 获取当前Searcher 的segments 版本，如果比这个小，就不用同步
     long curVersion = getCurrentSearchingVersion();
 
     message("top: start sync sis.version=" + version);
-
+    // 相等，不用同步
     if (version == curVersion) {
       // Caller releases the CopyState:
       message("top: new NRT point has same version as current; skipping");
       return null;
     }
-
+    // 小于，也不要同步
     if (version < curVersion) {
       // This can happen, if two syncs happen close together, and due to thread scheduling, the
       // incoming older version runs after the newer version
@@ -581,8 +615,10 @@ public abstract class ReplicaNode extends Node {
     final long startNS = System.nanoTime();
 
     message("top: newNRTPoint");
+    // 新的同步任务
     CopyJob job = null;
     try {
+      // 会从primary 先拉取元数据
       job =
           newCopyJob(
               "NRT point sync version=" + version,
@@ -614,14 +650,14 @@ public abstract class ReplicaNode extends Node {
     Collection<String> newNRTFiles = job.getFileNames();
 
     message("top: newNRTPoint: job files=" + newNRTFiles);
-
+    // 将当前正在运行的任务停掉！（正在处理的文件会放入新的任务中继续处理完，不会直接断掉）
     if (curNRTCopy != null) {
       job.transferAndCancel(curNRTCopy);
       assert curNRTCopy.getFailed();
     }
 
     curNRTCopy = job;
-
+    // 预拷贝 merged 文件 的job 也会被停掉，如果任务中的文件和新的nrt 有交集的话。
     for (String fileName : curNRTCopy.getFileNamesToCopy()) {
       assert lastCommitFiles.contains(fileName) == false
           : "fileName=" + fileName + " is in lastCommitFiles and is being copied?";
@@ -636,6 +672,7 @@ public abstract class ReplicaNode extends Node {
                     + ": file "
                     + fileName
                     + " is now being copied via NRT point");
+            // 取消 job，整个会直接取消，不会有新的job做交接，正在拉取的文件也会直接取消
             mergeJob.cancel("newNRTPoint is copying over the same file", null);
           }
         }
@@ -643,6 +680,7 @@ public abstract class ReplicaNode extends Node {
     }
 
     try {
+      // 开始任务，里面会给primary 发送需要拉取的文件列表！
       job.start();
     } catch (NodeCommunicationException nce) {
       // E.g. primary could crash/close when we are asking it for the copy state:
@@ -656,6 +694,7 @@ public abstract class ReplicaNode extends Node {
 
     // Runs in the background jobs thread, maybe slowly/throttled, and calls finishSync once it's
     // done:
+    // 将这个job放入后台运行
     launch(curNRTCopy);
     return curNRTCopy;
   }

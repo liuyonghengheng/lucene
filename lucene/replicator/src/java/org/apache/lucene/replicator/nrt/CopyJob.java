@@ -36,21 +36,24 @@ import org.apache.lucene.util.IOUtils;
  */
 public abstract class CopyJob implements Comparable<CopyJob> {
   private static final AtomicLong counter = new AtomicLong();
+  // 目标 replica node
   protected final ReplicaNode dest;
-
+  // 需要拷贝的文件列表
   protected final Map<String, FileMetaData> files;
-
+  //
   public final long ord = counter.incrementAndGet();
 
-  /** True for an NRT sync, false for pre-copying a newly merged segment */
+  /** True for an NRT sync, false for pre-copying a newly merged segment
+   * 优先级，NRT sync 优先级高，预拷贝merged segment 优先级底
+   * */
   public final boolean highPriority;
-
+  // 任务执行完的回调
   public final OnceDone onceDone;
 
   public final long startNS = System.nanoTime();
 
   public final String reason;
-
+  // 需要拷贝的文件
   protected final List<Map.Entry<String, FileMetaData>> toCopy;
 
   protected long totBytes;
@@ -58,13 +61,16 @@ public abstract class CopyJob implements Comparable<CopyJob> {
   protected long totBytesCopied;
 
   // The file we are currently copying:
+  // 当前正在拷贝的文件
   protected CopyOneFile current;
 
   // Set when we are cancelled
+  // 标记取消，在每次拉取新文件之前都会检查这个标志
   protected volatile Throwable exc;
   protected volatile String cancelReason;
 
   // toString may concurrently access this:
+  // 拷贝完成的文件！
   protected final Map<String, String> copiedFiles = new ConcurrentHashMap<>();
 
   protected CopyJob(
@@ -97,6 +103,7 @@ public abstract class CopyJob implements Comparable<CopyJob> {
   /**
    * Transfers whatever tmp files were already copied in this previous job and cancels the previous
    * job
+   * 不管是否临时文件已经在老的任务中被拷贝，都进行转移，并且取消老的任务
    */
   public synchronized void transferAndCancel(CopyJob prevJob) throws IOException {
     synchronized (prevJob) {
@@ -123,13 +130,16 @@ public abstract class CopyJob implements Comparable<CopyJob> {
     }
 
     // Cancel the previous job
+    // 标记取消，在每次拉取新文件之前都会检查这个标志
     prevJob.exc = new Throwable();
 
     // Carry over already copied files that we also want to copy
+    // 携带已经被拷贝，但是我们依然想拷贝的文件
     Iterator<Map.Entry<String, FileMetaData>> it = toCopy.iterator();
     long bytesAlreadyCopied = 0;
 
     // Iterate over all files we think we need to copy:
+    // 遍历所有的文件，找到我们需要拷贝的
     while (it.hasNext()) {
       Map.Entry<String, FileMetaData> ent = it.next();
       String fileName = ent.getKey();
@@ -137,6 +147,8 @@ public abstract class CopyJob implements Comparable<CopyJob> {
       if (prevTmpFileName != null) {
         // This fileName is common to both jobs, and the old job already finished copying it (to a
         // temp file), so we keep it:
+        // 在老的任务中已经拷贝完成的文件，我们直接放入新的任务
+        // 的拷贝完成的文件列表中，不需要重新拷贝
         long fileLength = ent.getValue().length;
         bytesAlreadyCopied += fileLength;
         dest.message(
@@ -150,9 +162,11 @@ public abstract class CopyJob implements Comparable<CopyJob> {
         copiedFiles.put(fileName, prevTmpFileName);
 
         // So we don't try to delete it, below:
+        // 此时可以从老的已完成任务列表中删除此完成的文件
         prevJob.copiedFiles.remove(fileName);
 
         // So it's not in our copy list anymore:
+        // 此时也可以将其从 遍历列表中删除
         it.remove();
       } else if (prevJob.current != null && prevJob.current.name.equals(fileName)) {
         // This fileName is common to both jobs, and it's the file that the previous job was in the
@@ -161,6 +175,9 @@ public abstract class CopyJob implements Comparable<CopyJob> {
         // copying over a large file
         // because otherwise we could keep failing the NRT copy and restarting this file from the
         // beginning and never catch up:
+        // 如果老的任务正在拷贝这个文件，在这种情况下，我们会继续在老的任务中完成拷贝它。这么做很重要，特别是对于我们
+        // 拷贝大文件的场景，否则，我们可能会继续使NRT副本失败，并从头开始重新启动此文件，永远无法赶上，可能每次拷贝
+        // 过程中就有新的job生成，从而打断。但是这样并不能完全解决问题，因为有可能一直没有生效segments info!
         dest.message(
             "xfer: carry over in-progress file "
                 + fileName
@@ -177,6 +194,9 @@ public abstract class CopyJob implements Comparable<CopyJob> {
         // must set current first, before writing/read to c.in/out in case that hits an exception,
         // so that we then close the temp
         // IndexOutput when cancelling ourselves:
+        // 在 写/读 到 c.in/out之前，必须设置当前拷贝文件，
+        // 以防遇到异常，这样我们就可以在取消时关闭临时IndexOutput
+        // 新的job一开始 就会继续执行current
         current = newCopyOneFile(prevJob.current);
 
         // Tell our new (primary) connection we'd like to copy this file first, but resuming from
@@ -198,9 +218,13 @@ public abstract class CopyJob implements Comparable<CopyJob> {
     dest.message("xfer: " + bytesAlreadyCopied + " bytes already copied of " + totBytes);
 
     // Delete all temp files the old job wrote but we don't need:
+    // 老的任务中 copiedFiles 没有被清理的，说明都是不需要保留的文件，都是可以直接删除的！
     dest.message("xfer: now delete old temp files: " + prevJob.copiedFiles.values());
     IOUtils.deleteFilesIgnoringExceptions(dest.dir, prevJob.copiedFiles.values());
-
+    // 1.老的job 中的current 文件不在新的拷贝文件列表中
+    // 2.或者上面的处理过程中，current 又被设置了？ 这种情况能不能发生？理论上是不会发生的，因为上面已经
+    // 将老任务标记为 prevJob.exc 取消了，在每次拉取新文件之前都会检查这个标志
+    // 这种情况下，直接删除即可
     if (prevJob.current != null) {
       IOUtils.closeWhileHandlingException(prevJob.current);
       if (Node.VERBOSE_FILES) {
@@ -213,7 +237,7 @@ public abstract class CopyJob implements Comparable<CopyJob> {
 
   protected abstract CopyOneFile newCopyOneFile(CopyOneFile current);
 
-  /** Begin copying files */
+  /** Begin copying files 开始拷贝文件*/
   public abstract void start() throws IOException;
 
   /**
@@ -222,6 +246,7 @@ public abstract class CopyJob implements Comparable<CopyJob> {
    */
   public abstract void runBlocking() throws Exception;
 
+  // 取消 job，整个会直接取消，不会有新的job做交接，正在拉取的文件也会直接取消
   public void cancel(String reason, Throwable exc) throws IOException {
     if (this.exc != null) {
       // Already cancelled
@@ -240,11 +265,12 @@ public abstract class CopyJob implements Comparable<CopyJob> {
     if (exc == null) {
       exc = new Throwable();
     }
-
+    // 设置取消标志
     this.exc = exc;
     this.cancelReason = reason;
 
     // Delete all temp files we wrote:
+    // 删除所有的临时文件
     IOUtils.deleteFilesIgnoringExceptions(dest.dir, copiedFiles.values());
 
     if (current != null) {

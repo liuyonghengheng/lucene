@@ -53,15 +53,19 @@ import org.apache.lucene.tests.store.MockDirectoryWrapper;
 import org.apache.lucene.tests.util.LuceneTestCase;
 
 class SimpleReplicaNode extends ReplicaNode {
+  // 当前节点的port
   final int tcpPort;
+  // 任务
   final Jobs jobs;
 
   // Rate limits incoming bytes/sec when fetching files:
+  // 流量限制
   final RateLimiter fetchRateLimiter;
   final AtomicLong bytesSinceLastRateLimiterCheck = new AtomicLong();
   final Random random;
 
   /** Changes over time, as primary node crashes and moves around */
+  // 当强的primary TCP port，当然也只可能有一个primary
   int curPrimaryTCPPort;
 
   public SimpleReplicaNode(
@@ -79,6 +83,7 @@ class SimpleReplicaNode extends ReplicaNode {
     this.tcpPort = tcpPort;
     this.random = new Random(random.nextLong());
 
+    // 流量设置
     // Random IO throttling on file copies: 5 - 20 MB/sec:
     double mbPerSec = 5 * (1.0 + 3 * random.nextDouble());
     message(String.format(Locale.ROOT, "top: will rate limit file fetch to %.2f MB/sec", mbPerSec));
@@ -126,7 +131,9 @@ class SimpleReplicaNode extends ReplicaNode {
 
     // Exceptions in here mean something went wrong talking over the socket, which are fine (e.g.
     // primary node crashed):
+    // 这里的异常表示socket上出现了问题（例如主节点崩溃）
     try {
+      // 建立新的连接，向primary 发送拉取文件的命令
       c = new Connection(curPrimaryTCPPort);
       c.out.writeByte(SimplePrimaryNode.CMD_FETCH_FILES);
       c.out.writeVInt(id);
@@ -134,6 +141,7 @@ class SimpleReplicaNode extends ReplicaNode {
         // No incoming CopyState: ask primary for latest one now
         c.out.writeByte((byte) 1);
         c.flush();
+        // 接收返回过来的文件列表等元数据
         copyState = TestSimpleServer.readCopyState(c.in);
         files = copyState.files;
       } else {
@@ -143,7 +151,8 @@ class SimpleReplicaNode extends ReplicaNode {
     } catch (Throwable t) {
       throw new NodeCommunicationException("exc while reading files to copy", t);
     }
-
+    // 后续拉去文件也一直使用这个connection，copyState 为从primary获取的元数据
+    // onceDone为任务完成的回调
     return new SimpleCopyJob(reason, c, copyState, this, files, highPriority, onceDone);
   }
 

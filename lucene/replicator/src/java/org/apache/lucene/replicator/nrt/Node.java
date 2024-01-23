@@ -38,7 +38,7 @@ import org.apache.lucene.store.IndexInput;
 
 /**
  * Common base class for {@link PrimaryNode} and {@link ReplicaNode}.
- *
+ * 一个 Node 代表一个index
  * @lucene.experimental
  */
 public abstract class Node implements Closeable {
@@ -47,20 +47,24 @@ public abstract class Node implements Closeable {
   public static boolean VERBOSE_CONNECTIONS = false;
 
   // Keys we store into IndexWriter's commit user data:
-
+  // 这些key 对应的数据，会被写入到 IndexWriter的 commit 信息中
   /**
    * Key to store the primary gen in the commit data, which increments every time we promote a new
    * primary, so replicas can detect when the primary they were talking to is changed
-   */ //由于节点宕机可能导致主副本已经切换，我们会把一个副本提升为主副本，所以要让副本知道他们交互的主副本已经改变。
+   */
+  // 由于节点宕机可能导致主副本已经切换，我们会把一个副本提升为主副本，所以要让副本知道与他们交互的主副本已经改变。
   public static String PRIMARY_GEN_KEY = "__primaryGen";
 
   /**
    * Key to store the version in the commit data, which increments every time we open a new NRT
-   * reader 这里需要确定是只有每次打开新的NRTreader才会增加吗？好像每次segments发生改变也会增加
+   * reader
+   * 会把这个version存储在commit data中， 每次重新打开一个新的NRT reader 就会增加。
    */
   public static String VERSION_KEY = "__version";
 
-  /** Compact ordinal for this node */
+  /** Compact ordinal for this node
+   * 这个节点的序数
+   * */
   protected final int id;
 
   protected final Directory dir;
@@ -68,7 +72,8 @@ public abstract class Node implements Closeable {
   protected final SearcherFactory searcherFactory;
 
   // Tracks NRT readers, opened from IW (primary) or opened from replicated SegmentInfos pulled
-  // across the wire (replica):跟踪readers，打开的同一条线上的， primary 或者 复制的SegmentInfos
+  // across the wire (replica):
+  // 跟踪readers，打开的同一条线路上的， primary 或者 复制的SegmentInfos
   protected ReferenceManager<IndexSearcher> mgr;
 
   /**

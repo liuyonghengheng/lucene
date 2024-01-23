@@ -31,11 +31,13 @@ import org.apache.lucene.util.IOUtils;
  * pre-copying merged files for merge warming.
  */
 class SimpleCopyJob extends CopyJob {
+  // 连接，这个job使用的连接
   final Connection c;
-
+  // 缓存
   final byte[] copyBuffer = new byte[65536];
+  // 目标segments信息
   final CopyState copyState;
-
+  // 文件元数据
   private Iterator<Map.Entry<String, FileMetaData>> iter;
 
   public SimpleCopyJob(
@@ -59,16 +61,19 @@ class SimpleCopyJob extends CopyJob {
       iter = toCopy.iterator();
 
       // Send all file names / offsets up front to avoid ping-ping latency:
+      // 发送所有的文件名
       try {
 
         // This means we resumed an already in-progress copy; we do this one first:
+        // 这种情况说明，我们是从另外一个老的job 中接管的正在处理的文件
+        // 我们需要先处理这个文件
         if (current != null) {
-          c.out.writeByte((byte) 0);
+          c.out.writeByte((byte) 0);//分割符
           c.out.writeString(current.name);
           c.out.writeVLong(current.getBytesCopied());
           totBytes += current.metaData.length;
         }
-
+        // 接下来处理后续需要处理的文件！
         for (Map.Entry<String, FileMetaData> ent : toCopy) {
           String fileName = ent.getKey();
           FileMetaData metaData = ent.getValue();
@@ -78,6 +83,7 @@ class SimpleCopyJob extends CopyJob {
           c.out.writeVLong(0);
         }
         c.out.writeByte((byte) 1);
+        // 将需要拉取的文件发送给 primary节点
         c.flush();
         c.s.shutdownOutput();
 
@@ -85,6 +91,8 @@ class SimpleCopyJob extends CopyJob {
           // Do this only at the end, after sending all requested files, so we don't deadlock due to
           // socket buffering waiting for primary to
           // send us this length:
+          // 发送完所有需要拉取的文件列表之后，才做这一步，所以我们不会因为socket 等待primary发送给我们长度参数
+          // 而导致死锁
           long len = c.in.readVLong();
           if (len != current.metaData.length) {
             throw new IllegalStateException(
@@ -180,13 +188,18 @@ class SimpleCopyJob extends CopyJob {
     copiedFiles.clear();
   }
 
-  /** Do an iota of work; returns true if all copying is done */
+  /** Do an iota of work; returns true if all copying is done
+   * 检查是否所有的文件都已经拷贝完成！
+   * 如果没有完成
+   * */
   synchronized boolean visit() throws IOException {
     if (exc != null) {
       // We were externally cancelled:
       return true;
     }
-
+    // 如果当前没有运行的，
+    // 如果列表都完成了，返回true
+    // 如果没完成，开始一个
     if (current == null) {
       if (iter.hasNext() == false) {
         c.close();
@@ -208,7 +221,8 @@ class SimpleCopyJob extends CopyJob {
       }
       current = new CopyOneFile(c.in, dest, fileName, metaData, copyBuffer);
     }
-
+    // 如果当前还有在运行的
+    // 如果当前文件已经拷贝完成，则设置为 null
     if (current.visit()) {
       // This file is done copying
       copiedFiles.put(current.name, current.tmpName);
