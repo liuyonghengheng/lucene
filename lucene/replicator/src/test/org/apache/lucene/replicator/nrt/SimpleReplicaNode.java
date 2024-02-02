@@ -141,7 +141,7 @@ class SimpleReplicaNode extends ReplicaNode {
         // No incoming CopyState: ask primary for latest one now
         c.out.writeByte((byte) 1);
         c.flush();
-        // 接收返回过来的文件列表等元数据
+        // 接收返回过来的文件列表, info, version等元数据
         copyState = TestSimpleServer.readCopyState(c.in);
         files = copyState.files;
       } else {

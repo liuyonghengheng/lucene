@@ -414,6 +414,12 @@ public abstract class ReplicaNode extends Node {
     }
   }
 
+  /**
+   * 最后会更新 segments info
+   * @param job
+   * @param startNS
+   * @throws IOException
+   */
   protected void finishNRTCopy(CopyJob job, long startNS) throws IOException {
     CopyState copyState = job.getCopyState();
     message(
