@@ -20,6 +20,7 @@ apply plugin: 'java-library'
 description = 'Lucene core library'
 
 dependencies {
+  moduleImplementation 'com.aparapi:aparapi'
   moduleTestImplementation project(':lucene:codecs')
   moduleTestImplementation project(':lucene:test-framework')
 }

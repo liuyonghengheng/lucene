@@ -23,6 +23,7 @@ public abstract class BaseVectorizationTestCase extends LuceneTestCase {
 
   protected static final VectorizationProvider LUCENE_PROVIDER = new DefaultVectorizationProvider();
   protected static final VectorizationProvider PANAMA_PROVIDER = VectorizationProvider.lookup(true);
+  protected static final VectorizationProvider APARAPI_PROVIDER = new AparapiVectorizationProvider();
 
   @BeforeClass
   public static void beforeClass() throws Exception {

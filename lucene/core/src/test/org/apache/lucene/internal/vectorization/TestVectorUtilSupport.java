@@ -97,11 +97,18 @@ public class TestVectorUtilSupport extends BaseVectorizationTestCase {
         func.applyAsDouble(LUCENE_PROVIDER.getVectorUtilSupport()),
         func.applyAsDouble(PANAMA_PROVIDER.getVectorUtilSupport()),
         DELTA);
+    assertEquals(
+            func.applyAsDouble(LUCENE_PROVIDER.getVectorUtilSupport()),
+            func.applyAsDouble(APARAPI_PROVIDER.getVectorUtilSupport()),
+            DELTA);
   }
 
   private void assertIntReturningProviders(ToIntFunction<VectorUtilSupport> func) {
     assertEquals(
         func.applyAsInt(LUCENE_PROVIDER.getVectorUtilSupport()),
         func.applyAsInt(PANAMA_PROVIDER.getVectorUtilSupport()));
+    assertEquals(
+            func.applyAsInt(LUCENE_PROVIDER.getVectorUtilSupport()),
+            func.applyAsInt(APARAPI_PROVIDER.getVectorUtilSupport()));
   }
 }

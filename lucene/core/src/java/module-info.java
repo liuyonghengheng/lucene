@@ -18,11 +18,13 @@
 import org.apache.lucene.codecs.lucene99.Lucene99Codec;
 
 /** Lucene Core. */
-@SuppressWarnings("module") // the test framework is compiled after the core...
+//@SuppressWarnings("module") // the test framework is compiled after the core...
+@SuppressWarnings({"module", "requires-automatic"})
 module org.apache.lucene.core {
   requires java.logging;
+  requires aparapi;
   requires static jdk.unsupported; // this is optional but without it MMapDirectory won't be enabled
-  requires static jdk.management; // this is optional but explicit declaration is recommended
+  requires static jdk.management;
 
   exports org.apache.lucene.analysis;
   exports org.apache.lucene.analysis.standard;
